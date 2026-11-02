@@ -39,6 +39,33 @@ Content-Type: application/json
 
 ### Current month report
 GET {{base}}/v1/finance/summary
+
+### Create a liability account (credit limit is not an asset or income)
+POST {{base}}/v1/finance/accounts
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"name":"SPayLater","kind":"paylater","classification":"liability","credit_limit_idr":3000000}
+
+### Record a BNPL purchase: recognized spending and liability, no bank cash movement
+POST {{base}}/v1/finance/liability-purchases
+Authorization: Bearer {{token}}
+Idempotency-Key: purchase-shoes-2026-11-02
+Content-Type: application/json
+
+{"liability_account_id":"REPLACE_SPAYLATER_UUID","principal_amount_idr":600000,"total_fee_idr":0,"tenor":3,"first_due_date":"2026-12-01","description":"Sepatu"}
+
+### Pay an installment from an asset account (principal repayment, not another expense)
+POST {{base}}/v1/finance/installments/REPLACE_INSTALLMENT_UUID/payments
+Authorization: Bearer {{token}}
+Idempotency-Key: repayment-spaylater-2026-12-01
+Content-Type: application/json
+
+{"asset_account_id":"REPLACE_BANK_UUID","amount_idr":200000,"description":"Cicilan SPayLater"}
+
+### Upcoming / overdue installment schedule
+GET {{base}}/v1/finance/installments?upcoming=true
+Authorization: Bearer {{token}}
 Authorization: Bearer {{token}}
 
 ### Search indexed notes, objects, and photo captions

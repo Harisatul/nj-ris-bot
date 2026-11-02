@@ -65,6 +65,7 @@ func (a *App) Routes() http.Handler {
 		r.Post("/v1/search", a.search)
 		r.Post("/v1/finance/accounts", a.financeAccountCreate)
 		r.Get("/v1/finance/accounts", a.financeAccounts)
+		r.Get("/v1/finance/accounts/{id}", a.financeAccountGet)
 		r.Post("/v1/finance/categories", a.financeCategoryCreate)
 		r.Get("/v1/finance/categories", a.financeCategories)
 		r.Post("/v1/finance/transactions", a.financeTransactionCreate)
@@ -73,6 +74,9 @@ func (a *App) Routes() http.Handler {
 		r.Patch("/v1/finance/transactions/{id}", a.financeTransactionPatch)
 		r.Delete("/v1/finance/transactions/{id}", a.financeTransactionDelete)
 		r.Get("/v1/finance/summary", a.financeSummary)
+		r.Post("/v1/finance/liability-purchases", a.financeLiabilityPurchase)
+		r.Get("/v1/finance/installments", a.financeInstallments)
+		r.Post("/v1/finance/installments/{id}/payments", a.financeInstallmentPay)
 	})
 	return r
 }

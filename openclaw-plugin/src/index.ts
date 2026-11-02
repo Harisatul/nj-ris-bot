@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { createHash } from "node:crypto";
 
 // Keep this plugin thin: the Go API owns validation, data access, and permissions.
 const BASE = (process.env.MIMO_API_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
@@ -7,6 +8,11 @@ const TOKEN = process.env.MIMO_API_TOKEN || "";
 type Args = Record<string, unknown>;
 function select(args: Args, fields: string[]): Args {
   return Object.fromEntries(fields.filter((k) => args[k] !== undefined).map((k) => [k, args[k]]));
+}
+function operationKey(prefix: string, args: Args, fields: string[]): string {
+  const supplied = args.idempotency_key;
+  if (typeof supplied === "string" && supplied.trim()) return supplied.trim().slice(0, 120);
+  return `${prefix}:${createHash("sha256").update(JSON.stringify(select(args, fields))).digest("hex").slice(0, 48)}`;
 }
 async function request(method: string, path: string, data?: Args, idem?: string) {
   if (!TOKEN) throw new Error("MIMO_API_TOKEN missing from OpenClaw environment");
@@ -82,27 +88,32 @@ export default {
     register(api, "mimo_search", "Find stored notes, objects, memory, or photo captions; returns source IDs. Do not invent missing results.",
       Type.Object({ query: S({ minLength: 2 }), limit: opt(Type.Integer({ minimum: 1, maximum: 30 })) }),
       async (_id, p) => request("POST", "/v1/search", select(p, ["query", "limit"])));
-    register(api, "mimo_finance_accounts", "Create a financial account or list accounts with database-calculated IDR balances.",
-      Type.Object({ action: Type.Union([Type.Literal("create"), Type.Literal("list")]), name: opt(S()), kind: opt(S()), opening_balance_idr: opt(Type.Integer()) }),
-      async (_id, p) => p.action === "list" ? request("GET", "/v1/finance/accounts") : request("POST", "/v1/finance/accounts", select(p, ["name", "kind", "opening_balance_idr"])));
+    register(api, "mimo_finance_accounts", "Create/list/get asset and liability accounts with database-calculated IDR balances and available credit.",
+      Type.Object({ action: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("get")]), id: opt(S()), name: opt(S()), kind: opt(S()), classification: opt(S()), opening_balance_idr: opt(Type.Integer()), credit_limit_idr: opt(Type.Integer()) }),
+      async (_id, p) => { if (p.action === "list") return request("GET", "/v1/finance/accounts"); if (p.action === "get") return request("GET", `/v1/finance/accounts/${pathID(p.id)}`); return request("POST", "/v1/finance/accounts", select(p, ["name", "kind", "classification", "opening_balance_idr", "credit_limit_idr"])); });
     register(api, "mimo_finance_categories", "Create or list income/expense categories.",
       Type.Object({ action: Type.Union([Type.Literal("create"), Type.Literal("list")]), name: opt(S()), kind: opt(S()) }),
       async (_id, p) => p.action === "list" ? request("GET", "/v1/finance/categories") : request("POST", "/v1/finance/categories", select(p, ["name", "kind"])));
     register(api, "mimo_finance_transactions", "Record/list/get/update/void IDR transactions. Account and category IDs must be valid. Transfers are NOT expenses.",
       Type.Object({
-        action: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("get"), Type.Literal("update"), Type.Literal("void")]),
+        action: Type.Union([Type.Literal("create"), Type.Literal("purchase"), Type.Literal("list"), Type.Literal("get"), Type.Literal("update"), Type.Literal("void")]),
         id: opt(S()), type: opt(S()), amount_idr: opt(Type.Integer({ minimum: 1 })),
         from_account_id: opt(S()), to_account_id: opt(S()), category_id: opt(S()),
-        description: opt(S()), occurred_at: opt(S()),
+        liability_account_id: opt(S()), principal_amount_idr: opt(Type.Integer({ minimum: 1 })), total_fee_idr: opt(Type.Integer({ minimum: 0 })), tenor: opt(Type.Integer({ minimum: 1, maximum: 120 })), first_due_date: opt(S()),
+        description: opt(S()), occurred_at: opt(S()), idempotency_key: opt(S()),
       }), async (callID, p) => {
         const action = p.action as string;
-        if (action === "create") return request("POST", "/v1/finance/transactions", select(p, ["type", "amount_idr", "from_account_id", "to_account_id", "category_id", "description", "occurred_at"]), callID);
+        if (action === "create") return request("POST", "/v1/finance/transactions", select(p, ["type", "amount_idr", "from_account_id", "to_account_id", "category_id", "description", "occurred_at"]), operationKey("transaction", p, ["type", "amount_idr", "from_account_id", "to_account_id", "category_id", "description", "occurred_at"]));
+        if (action === "purchase") return request("POST", "/v1/finance/liability-purchases", select(p, ["liability_account_id", "principal_amount_idr", "total_fee_idr", "tenor", "first_due_date", "category_id", "description", "occurred_at"]), operationKey("liability-purchase", p, ["liability_account_id", "principal_amount_idr", "total_fee_idr", "tenor", "first_due_date", "description"]));
         if (action === "list") return request("GET", "/v1/finance/transactions");
         const path = `/v1/finance/transactions/${pathID(p.id)}`;
         if (action === "get") return request("GET", path);
         if (action === "update") return request("PATCH", path, select(p, ["amount_idr", "category_id", "description", "occurred_at"]));
         return request("DELETE", path);
       });
+    register(api, "mimo_finance_installments", "List BNPL/credit installment schedules and record atomic partial or full repayments. Never repeat a payment after a timeout without checking its idempotency key.",
+      Type.Object({ action: Type.Union([Type.Literal("list"), Type.Literal("upcoming"), Type.Literal("overdue"), Type.Literal("pay")]), id: opt(S()), debt_id: opt(S()), asset_account_id: opt(S()), amount_idr: opt(Type.Integer({ minimum: 1 })), description: opt(S()), idempotency_key: opt(S()) }),
+      async (_id, p) => { if (p.action === "pay") return request("POST", `/v1/finance/installments/${pathID(p.id)}/payments`, select(p, ["asset_account_id", "amount_idr", "description"]), operationKey("installment-payment", p, ["id", "asset_account_id", "amount_idr", "description"])); const qs = new URLSearchParams(); if (p.debt_id) qs.set("debt_id", String(p.debt_id)); if (p.action === "upcoming") qs.set("upcoming", "true"); if (p.action === "overdue") qs.set("overdue", "true"); return request("GET", "/v1/finance/installments" + (qs.size ? `?${qs}` : "")); });
     register(api, "mimo_finance_summary", "Accurate SQL-computed income, expenses, and categories by date range (to is exclusive).",
       Type.Object({ from: opt(S()), to: opt(S()) }), async (_id, p) => {
         const qs = new URLSearchParams(); if (p.from) qs.set("from", String(p.from)); if (p.to) qs.set("to", String(p.to));

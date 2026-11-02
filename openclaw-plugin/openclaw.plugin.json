@@ -7,7 +7,7 @@
     "tools": [
       "mimo_notes", "mimo_objects", "mimo_memory", "mimo_search",
       "mimo_finance_accounts", "mimo_finance_categories",
-      "mimo_finance_transactions", "mimo_finance_summary", "mimo_assets"
+      "mimo_finance_transactions", "mimo_finance_installments", "mimo_finance_summary", "mimo_assets"
     ]
   },
   "activation": {"onStartup": true},

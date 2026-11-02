@@ -58,6 +58,16 @@ go run ./cmd/api
 
 Go API binds to loopback by default. Compose binds the published port **only to host 127.0.0.1**. The API must not be exposed through a public port or Cloudflare unauthenticated route.
 
+## Finance v0.2: liabilities and installments
+
+Finance accounts are classified as `asset` or `liability`. Use `cash`, `bank`, and `ewallet` for assets; use `paylater`, `credit_card`, or `loan` for liabilities. Existing accounts default safely to `asset` during migration. Liability opening balances represent debt already owed and do not create income or spending. Credit limits are metadata only and never increase assets.
+
+`POST /v1/finance/liability-purchases` records a purchase expense and increases the liability without reducing bank cash. It creates an immutable debt parent and rounded installment schedule. `POST /v1/finance/installments/{id}/payments` creates one debt repayment transaction, atomically allocates it across the oldest unpaid installments, supports partial payments, and rejects overpayment. Repayment reduces asset cash and liability outstanding without adding another shopping expense. Fees are recognized once at purchase time as `liability_fee`; paying them is included in the repayment allocation.
+
+`GET /v1/finance/summary` now separates `recognized_spending_idr` from `cash_outflow_idr` and returns total assets, liabilities, net worth, and liability balances. `DELETE` remains a void operation; repayment allocations are reversed transactionally so financial history is retained. All mutation endpoints accept `Idempotency-Key`.
+
+For an existing deployment, run the forward-only `002_finance_liabilities.sql` through `go run ./cmd/migrate` against a backup or Neon branch first. The migration adds columns and tables only; it does not drop finance data. Do not run integration tests against production.
+
 ## API tour
 
 ```bash

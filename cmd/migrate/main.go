@@ -23,18 +23,29 @@ func main() {
 		panic(err)
 	}
 	defer conn.Close(context.Background())
-	// 001_init.sql contains idempotent DDL. pgx simple protocol supports multi-statement SQL.
-	bytes, err := os.ReadFile("db/migrations/001_init.sql")
+	entries, err := os.ReadDir("db/migrations")
 	if err != nil {
 		panic(err)
 	}
-	script := string(bytes)
-	if !strings.Contains(script, "CREATE SCHEMA IF NOT EXISTS mimo") {
-		panic(errors.New("unexpected migration contents"))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		bytes, readErr := os.ReadFile("db/migrations/" + entry.Name())
+		if readErr != nil {
+			panic(readErr)
+		}
+		script := string(bytes)
+		if entry.Name() == "001_init.sql" && !strings.Contains(script, "CREATE SCHEMA IF NOT EXISTS mimo") {
+			panic(errors.New("unexpected baseline migration contents"))
+		}
+		if _, execErr := conn.Exec(ctx, script, pgx.QueryExecModeSimpleProtocol); execErr != nil {
+			panic(fmt.Errorf("migration %s: %w", entry.Name(), execErr))
+		}
+		fmt.Println("Applied", entry.Name())
 	}
-	_, err = conn.Exec(ctx, script, pgx.QueryExecModeSimpleProtocol)
-	if err != nil {
-		panic(fmt.Errorf("migration: %w", err))
+	var ambiguous int64
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM mimo.finance_accounts WHERE kind='other' AND classification='asset'`).Scan(&ambiguous); err == nil && ambiguous > 0 {
+		fmt.Printf("WARNING: review %d existing 'other' finance account(s); migration classified them as asset by safe default.\n", ambiguous)
 	}
-	fmt.Println("Mimo schema migration applied successfully")
 }
