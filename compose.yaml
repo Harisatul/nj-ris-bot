@@ -1,0 +1,17 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+  worker:
+    build: .
+    command: ["mimo-worker"]
+    env_file: .env
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+  # Run once with: docker compose run --rm api mimo-migrate

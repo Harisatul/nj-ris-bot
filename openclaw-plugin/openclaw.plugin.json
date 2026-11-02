@@ -1,0 +1,15 @@
+{
+  "id": "mimo-tools",
+  "name": "Mimo Tools",
+  "description": "Personal notes, memory, objects, media lookup, and IDR finance tracking via Mimo Go API",
+  "categories": ["productivity"],
+  "contracts": {
+    "tools": [
+      "mimo_notes", "mimo_objects", "mimo_memory", "mimo_search",
+      "mimo_finance_accounts", "mimo_finance_categories",
+      "mimo_finance_transactions", "mimo_finance_summary", "mimo_assets"
+    ]
+  },
+  "activation": {"onStartup": true},
+  "configSchema": {"type": "object", "additionalProperties": false}
+}

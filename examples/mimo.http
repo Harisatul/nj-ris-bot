@@ -1,0 +1,49 @@
+@base = http://127.0.0.1:8080
+@token = change_me_from_env
+
+### Health
+GET {{base}}/healthz
+
+### Create a work note
+POST {{base}}/v1/notes
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"kind":"work","title":"OpenShift lab","content":"Test persistent volumes and monitoring","tags":["openshift","lab"]}
+
+### List notes
+GET {{base}}/v1/notes
+Authorization: Bearer {{token}}
+
+### Create a finance account
+POST {{base}}/v1/finance/accounts
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"name":"Cash","kind":"cash","opening_balance_idr":0}
+
+### Add an expense category
+POST {{base}}/v1/finance/categories
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"name":"Makan","kind":"expense"}
+
+### Add a money transaction (paste account UUID from response)
+POST {{base}}/v1/finance/transactions
+Authorization: Bearer {{token}}
+Idempotency-Key: whatsapp-message-id-001
+Content-Type: application/json
+
+{"type":"expense","amount_idr":28000,"from_account_id":"REPLACE_ACCOUNT_UUID","description":"Makan siang"}
+
+### Current month report
+GET {{base}}/v1/finance/summary
+Authorization: Bearer {{token}}
+
+### Search indexed notes, objects, and photo captions
+POST {{base}}/v1/search
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"query":"OpenShift monitoring","limit":5}
