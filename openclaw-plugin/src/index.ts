@@ -85,6 +85,9 @@ export default {
         if (p.action === "list") return request("GET", "/v1/memories");
         return request("DELETE", `/v1/memories/${pathID(p.id)}`);
       });
+    register(api, "mimo_memory_search", "Retrieve grounded semantic memory matches with stable memory IDs and similarity scores. Use only the returned memories; do not invent context.",
+      Type.Object({ query: S({ minLength: 2, maxLength: 1000 }), limit: opt(Type.Integer({ minimum: 1, maximum: 20 })), min_similarity: opt(Type.Number({ minimum: -1, maximum: 1 })) }),
+      async (_id, p) => request("POST", "/v1/memory/search", select(p, ["query", "limit", "min_similarity"])));
     register(api, "mimo_search", "Find stored notes, objects, memory, or photo captions; returns source IDs. Do not invent missing results.",
       Type.Object({ query: S({ minLength: 2 }), limit: opt(Type.Integer({ minimum: 1, maximum: 30 })) }),
       async (_id, p) => request("POST", "/v1/search", select(p, ["query", "limit"])));

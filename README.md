@@ -8,7 +8,7 @@
 
 - `cmd/api` — Go API, limited to owner identity in backend config, Bearer API token, JSON validation
 - `cmd/migrate` — idempotent baseline migration compatible with your Mimo v0.2 `mimo` schema; manual migration tool (not a schema-diff system)
-- `cmd/worker` — optional background embeddings indexing via OpenAI-compatible embeddings HTTP API
+- `cmd/worker` — durable background indexing through the separately deployed Ollama EmbeddingGemma service
 - `internal/app` — notes CRUD with revisions, objects CRUD, memory write/list/delete, R2 media upload, search, finance accounts/categories/transactions/summary
 - `openclaw-plugin` — thin TypeScript native OpenClaw tools calling HTTP Go backend
 - `db/migrations` — database migration using PostgreSQL, pg_trgm and pgvector
@@ -19,7 +19,7 @@
 1. A Neon PostgreSQL project where `vector` and `pg_trgm` are allowed.
 2. Go 1.25+ (local), or Docker Compose on the **remote VM**.
 3. Optional Cloudflare R2 account + private bucket to store photos/PDFs.
-4. Optional embedding API: endpoint compatible with `POST /v1/embeddings`, max 2,000 vector dimensions (e.g. 1,536). DeepSeek chat API is not automatically an embedding API.
+4. Optional Ollama embedding service with `embeddinggemma-2:440m` (768 dimensions). Mimo does not install Ollama or download model weights.
 5. OpenClaw already connected to your own WhatsApp. Restrict allowed senders to yourself.
 
 ## Quick start on VM (Docker recommended)
@@ -117,11 +117,13 @@ See `openclaw-plugin/README.md`. Build the TypeScript plugin, make `MIMO_API_URL
 
 **Not yet automatic:** extracting captions using a vision model, ingestion of inbound WhatsApp attachments, OCR, and image-to-image similarity. The Go API and R2 storage are ready for these additions but this ZIP does **not** claim that WhatsApp photos are ingested end-to-end automatically. The plugin can search/retrieve registered assets now.
 
-## Search/indexing
+## Search/indexing and semantic memory
 
-Writes synchronously upsert `mimo.search_chunks` and become immediately searchable through PostgreSQL full-text search. Set `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, and `EMBEDDING_MODEL` to enable background vector indexing with `mimo-worker`. Search uses lexical + optional semantic ranking with Reciprocal Rank Fusion (RRF). Vector search is exact (no HNSW yet).
+Writes synchronously upsert `mimo.search_chunks` and become immediately searchable through PostgreSQL full-text search. Set `EMBEDDING_URL`, `EMBEDDING_MODEL=embeddinggemma-2:440m`, and `EMBEDDING_DIMENSIONS=768` to enable durable background vector indexing with `mimo-worker`. Use `http://127.0.0.1:11434/api/embed` when Go runs on the VPS host, or `http://mimo-ollama:11434/api/embed` only when the containers share `embeddings-engine_default`.
 
-If you add embeddings **after** records already exist, backfill jobs for all chunks (example commented in `scripts/backfill.sql`). Existing Mimo v0.2 memory records will not be included until you run the included memory backfill script. If embedding provider fails, search gracefully returns lexical results.
+Run `go run ./cmd/migrate` to apply migration `003_embedding.sql`; it preserves the historical vector tables and adds `mimo.semantic_embeddings` with `vector(768)`. Use `POST /v1/memory/search` or the OpenClaw `mimo_memory_search` tool for semantic memory retrieval. Search is owner-scoped and only returns active personal memories. See [docs/semantic-memory.md](docs/semantic-memory.md) for backfill, operations, and rollback.
+
+If you add embeddings after records already exist, run the owner-scoped `scripts/backfill.sql` to queue chunks. Existing CRUD does not depend on embedding availability; if Ollama fails, lexical `/v1/search` continues to work and semantic search reports an unavailable provider.
 
 ## Privacy and operations
 

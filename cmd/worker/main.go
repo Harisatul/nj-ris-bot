@@ -34,7 +34,7 @@ func main() {
 	defer db.Close()
 	var ec *embedding.Client
 	if c.HasEmbedding() {
-		ec = embedding.New(c.EmbeddingURL, c.EmbeddingKey, c.EmbeddingModel)
+		ec = embedding.New(c.EmbeddingURL, c.EmbeddingKey, c.EmbeddingModel, c.EmbeddingDimensions)
 	}
 	log.Printf("Mimo worker started; embeddings enabled=%v", ec != nil)
 	ticker := time.NewTicker(5 * time.Second)
@@ -63,10 +63,10 @@ func processOne(ctx context.Context, db *pgxpool.Pool, ec *embedding.Client) (bo
 	}
 	defer tx.Rollback(ctx)
 	var jobID int64
-	var chunkID, body string
-	err = tx.QueryRow(ctx, `SELECT j.id,j.chunk_id::text,c.body FROM mimo.ingestion_jobs j JOIN mimo.search_chunks c ON c.id=j.chunk_id
+	var chunkID, body, contentHash string
+	err = tx.QueryRow(ctx, `SELECT j.id,j.chunk_id::text,c.body,c.content_hash FROM mimo.ingestion_jobs j JOIN mimo.search_chunks c ON c.id=j.chunk_id
  WHERE j.model_id=$1 AND ( (j.status IN('pending','failed') AND j.next_run_at<=now()) OR (j.status='running' AND j.updated_at<now()-interval '10 minutes') )
- ORDER BY j.next_run_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, ec.Model).Scan(&jobID, &chunkID, &body)
+	ORDER BY j.next_run_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, ec.Model).Scan(&jobID, &chunkID, &body, &contentHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
@@ -86,12 +86,12 @@ func processOne(ctx context.Context, db *pgxpool.Pool, ec *embedding.Client) (bo
 		return false, err
 	}
 	defer finished.Rollback(ctx)
-	var currentStatus string
-	err = finished.QueryRow(ctx, `SELECT status FROM mimo.ingestion_jobs WHERE id=$1 FOR UPDATE`, jobID).Scan(&currentStatus)
+	var currentStatus, currentHash string
+	err = finished.QueryRow(ctx, `SELECT j.status,c.content_hash FROM mimo.ingestion_jobs j JOIN mimo.search_chunks c ON c.id=j.chunk_id WHERE j.id=$1 FOR UPDATE OF j`, jobID).Scan(&currentStatus, &currentHash)
 	if err != nil {
 		return false, err
 	}
-	if currentStatus != "running" {
+	if currentStatus != "running" || currentHash != contentHash {
 		return true, finished.Commit(ctx)
 	} // changed by an edit; newer job remains queued
 	if embedErr != nil {
@@ -102,9 +102,9 @@ func processOne(ctx context.Context, db *pgxpool.Pool, ec *embedding.Client) (bo
 		}
 		return true, err
 	}
-	_, err = finished.Exec(ctx, `INSERT INTO mimo.search_embeddings(chunk_id,model_id,embedding)
- VALUES($1::uuid,$2,($3::text)::vector)
- ON CONFLICT(chunk_id,model_id) DO UPDATE SET embedding=EXCLUDED.embedding,updated_at=now()`, chunkID, ec.Model, embedding.VectorText(vector))
+	_, err = finished.Exec(ctx, `INSERT INTO mimo.semantic_embeddings(chunk_id,model_id,dimensions,content_hash,embedding)
+		VALUES($1::uuid,$2,$3,$4,($5::text)::vector)
+		ON CONFLICT(chunk_id,model_id) DO UPDATE SET dimensions=EXCLUDED.dimensions,content_hash=EXCLUDED.content_hash,embedding=EXCLUDED.embedding,updated_at=now()`, chunkID, ec.Model, ec.Dimensions, contentHash, embedding.VectorText(vector))
 	if err == nil {
 		_, err = finished.Exec(ctx, `UPDATE mimo.ingestion_jobs SET status='done',error_message=NULL,updated_at=now() WHERE id=$1`, jobID)
 	}

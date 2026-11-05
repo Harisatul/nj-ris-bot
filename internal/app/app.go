@@ -32,7 +32,7 @@ func New(db *pgxpool.Pool, c config.Config) *App {
 		a.R2 = r2.New(c.R2AccountID, c.R2AccessKey, c.R2SecretKey, c.R2Bucket)
 	}
 	if c.HasEmbedding() {
-		a.Embed = embedding.New(c.EmbeddingURL, c.EmbeddingKey, c.EmbeddingModel)
+		a.Embed = embedding.New(c.EmbeddingURL, c.EmbeddingKey, c.EmbeddingModel, c.EmbeddingDimensions)
 	}
 	return a
 }
@@ -62,6 +62,7 @@ func (a *App) Routes() http.Handler {
 		r.Post("/v1/memories", a.memoryCreate)
 		r.Get("/v1/memories", a.memoryList)
 		r.Delete("/v1/memories/{id}", a.memoryDelete)
+		r.Post("/v1/memory/search", a.memorySemanticSearch)
 		r.Post("/v1/search", a.search)
 		r.Post("/v1/finance/accounts", a.financeAccountCreate)
 		r.Get("/v1/finance/accounts", a.financeAccounts)
@@ -165,18 +166,19 @@ func (a *App) audit(ctx context.Context, tx pgx.Tx, action, resID string) error 
 	return err
 }
 func (a *App) index(ctx context.Context, tx pgx.Tx, source, id, body string) error {
+	hash := embedding.ContentHash(body)
 	var chunkID string
-	err := tx.QueryRow(ctx, `INSERT INTO mimo.search_chunks(owner_id,source_type,source_id,body)
- VALUES($1,$2,$3::uuid,$4)
- ON CONFLICT(owner_id,source_type,source_id) DO UPDATE SET body=EXCLUDED.body,updated_at=now()
+	err := tx.QueryRow(ctx, `INSERT INTO mimo.search_chunks(owner_id,source_type,source_id,body,content_hash)
+ VALUES($1,$2,$3::uuid,$4,$5)
+ ON CONFLICT(owner_id,source_type,source_id) DO UPDATE SET body=EXCLUDED.body,content_hash=EXCLUDED.content_hash,updated_at=now()
  RETURNING id::text`, a.C.OwnerID, source, id, body).Scan(&chunkID)
 	if err != nil {
 		return err
 	}
 	if a.Embed != nil {
-		_, err = tx.Exec(ctx, `INSERT INTO mimo.ingestion_jobs(chunk_id,model_id,status,attempts,next_run_at)
-    VALUES($1::uuid,$2,'pending',0,now())
-    ON CONFLICT(chunk_id,model_id) DO UPDATE SET status='pending',attempts=0,next_run_at=now(),updated_at=now()`, chunkID, a.C.EmbeddingModel)
+		_, err = tx.Exec(ctx, `INSERT INTO mimo.ingestion_jobs(chunk_id,model_id,content_hash,status,attempts,next_run_at)
+    VALUES($1::uuid,$2,$3,'pending',0,now())
+    ON CONFLICT(chunk_id,model_id) DO UPDATE SET content_hash=EXCLUDED.content_hash,status='pending',attempts=0,next_run_at=now(),updated_at=now()`, chunkID, a.C.EmbeddingModel, hash)
 	}
 	return err
 }
