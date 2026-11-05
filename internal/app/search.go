@@ -76,11 +76,11 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
 			log.Printf("search embedding provider unavailable: %v", e)
 		} else {
 			rows, e := a.DB.Query(r.Context(), `SELECT c.source_type,c.source_id::text,left(c.body,800),
- (1-(e.embedding <=> (($3::text)::vector)))::float8 AS similarity
- FROM mimo.search_embeddings e JOIN mimo.search_chunks c ON c.id=e.chunk_id
- WHERE c.owner_id=$1 AND e.model_id=$2 AND vector_dims(e.embedding)=vector_dims(($3::text)::vector)
+(1-(e.embedding <=> (($3::text)::vector)))::float8 AS similarity
+FROM mimo.semantic_embeddings e JOIN mimo.search_chunks c ON c.id=e.chunk_id AND c.content_hash=e.content_hash
+WHERE c.owner_id=$1 AND e.model_id=$2 AND e.dimensions=$4
  AND (c.source_type<>'memory' OR EXISTS (SELECT 1 FROM mimo.memory_entries m WHERE m.id=c.source_id AND m.scope_type='personal' AND m.scope_id=$1 AND m.status='active' AND (m.expires_at IS NULL OR m.expires_at>now())))
- ORDER BY e.embedding <=> (($3::text)::vector) LIMIT $4`, a.C.OwnerID, a.C.EmbeddingModel, vectorText(v), d.Limit*3)
+ORDER BY e.embedding <=> (($3::text)::vector) LIMIT $5`, a.C.OwnerID, a.C.EmbeddingModel, vectorText(v), a.C.EmbeddingDimensions, d.Limit*3)
 			if e != nil {
 				warning = "semantic database query failed; lexical results only"
 				log.Printf("search vector query failed: %v", e)

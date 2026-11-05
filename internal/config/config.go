@@ -12,6 +12,7 @@ type Config struct {
 	DatabaseURL, APIToken, OwnerID, ListenAddr      string
 	R2AccountID, R2AccessKey, R2SecretKey, R2Bucket string
 	EmbeddingURL, EmbeddingKey, EmbeddingModel      string
+	EmbeddingDimensions                             int
 	MaxUploadBytes                                  int64
 }
 
@@ -27,8 +28,15 @@ func Load() (Config, error) {
 		OwnerID: Env("MIMO_OWNER_ID", "me"), ListenAddr: Env("LISTEN_ADDR", "127.0.0.1:8080"),
 		R2AccountID: os.Getenv("R2_ACCOUNT_ID"), R2AccessKey: os.Getenv("R2_ACCESS_KEY_ID"),
 		R2SecretKey: os.Getenv("R2_SECRET_ACCESS_KEY"), R2Bucket: os.Getenv("R2_BUCKET"),
-		EmbeddingURL: os.Getenv("EMBEDDING_API_URL"), EmbeddingKey: os.Getenv("EMBEDDING_API_KEY"),
-		EmbeddingModel: os.Getenv("EMBEDDING_MODEL"), MaxUploadBytes: 15 << 20,
+		EmbeddingURL: Env("EMBEDDING_URL", os.Getenv("EMBEDDING_API_URL")), EmbeddingKey: os.Getenv("EMBEDDING_API_KEY"),
+		EmbeddingModel: Env("EMBEDDING_MODEL", "embeddinggemma-2:440m"), EmbeddingDimensions: 768, MaxUploadBytes: 15 << 20,
+	}
+	if v := os.Getenv("EMBEDDING_DIMENSIONS"); v != "" {
+		n, e := strconv.Atoi(v)
+		if e != nil || n != 768 {
+			return c, errors.New("EMBEDDING_DIMENSIONS must be 768 for semantic memory")
+		}
+		c.EmbeddingDimensions = n
 	}
 	if v := os.Getenv("MAX_UPLOAD_MB"); v != "" {
 		n, e := strconv.ParseInt(v, 10, 64)
