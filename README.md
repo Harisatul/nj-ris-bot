@@ -8,6 +8,7 @@
 
 - `cmd/api` — Go API, limited to owner identity in backend config, Bearer API token, JSON validation
 - `cmd/migrate` — checksum-tracked, advisory-locked migration runner with legacy baseline and status commands
+- `cmd/backfill` — owner-scoped, idempotent semantic-memory/note queue synchronization CLI
 - `cmd/worker` — durable background indexing through the separately deployed Ollama EmbeddingGemma service
 - `internal/app` — notes CRUD with revisions, objects CRUD, memory write/list/delete, R2 media upload, search, finance accounts/categories/transactions/summary
 - `openclaw-plugin` — thin TypeScript native OpenClaw tools calling HTTP Go backend

@@ -4,7 +4,8 @@ COPY . .
 RUN go mod tidy && go mod download
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mimo-api ./cmd/api && \
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mimo-worker ./cmd/worker && \
-    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mimo-migrate ./cmd/migrate
+    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mimo-migrate ./cmd/migrate && \
+    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mimo-backfill ./cmd/backfill
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
