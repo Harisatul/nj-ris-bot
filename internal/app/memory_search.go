@@ -85,5 +85,5 @@ ORDER BY e.embedding <=> ($3::text)::vector
 		internalErr(w, err)
 		return
 	}
-	jsonOK(w, map[string]any{"query": d.Query, "model": a.EmbeddingModel, "results": results})
+	jsonOK(w, map[string]any{"query": d.Query, "model": a.C.EmbeddingModel, "results": results})
 }
