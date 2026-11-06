@@ -22,7 +22,21 @@ Run the normal migration command against a Neon branch or backup first:
 go run ./cmd/migrate
 ```
 
-Migration `003_embedding.sql` adds content hashes and a new `vector(768)` table. It leaves existing vectors untouched. To queue old personal memories and notes after the worker is configured, edit the owner placeholder in `scripts/backfill.sql` and run it in the Neon SQL editor. New and updated notes/memories enqueue work automatically when embeddings are enabled.
+Migration `003_embedding.sql` adds content hashes and a new `vector(768)` table. It leaves existing vectors untouched. After the migration, build the image and use the production-safe CLI:
+
+```bash
+docker compose build
+docker compose run --rm --no-deps api mimo-backfill --dry-run
+docker compose run --rm --no-deps api mimo-backfill
+```
+
+The CLI reads `MIMO_OWNER_ID` and `EMBEDDING_MODEL`, synchronizes active personal memories and non-deleted personal notes, removes stale search chunks, and queues only missing or changed vectors. A completed job with the same content hash and an existing vector is preserved. Use `--retry-failed` only when you intentionally want another bounded retry cycle:
+
+```bash
+docker compose run --rm --no-deps api mimo-backfill --retry-failed
+```
+
+The command reports enqueue status, not vector-generation completion. Monitor the worker logs and verify `mimo.semantic_embeddings` separately. The SQL file in `scripts/backfill.sql` remains a psql fallback; it requires explicit `owner_id` and `model_id` variables and should not be edited with private data.
 
 ## Retrieval
 
@@ -33,6 +47,22 @@ The OpenClaw plugin exposes `mimo_memory_search`. If the embedding service is un
 ## Operations and rollback
 
 The worker retries transient Ollama failures three times per request and records durable job failures with exponential backoff. It uses `SKIP LOCKED`, a two-connection pool, and stale-job recovery. Content hashes prevent stale jobs from overwriting newer text. Deleting a note or memory deletes its chunk and vector through cascading foreign keys.
+
+Useful verification queries:
+
+```sql
+SELECT status, count(*) FROM mimo.ingestion_jobs
+WHERE model_id = 'embeddinggemma-2:440m' GROUP BY status ORDER BY status;
+
+SELECT count(*) AS vectors
+FROM mimo.semantic_embeddings
+WHERE model_id = 'embeddinggemma-2:440m' AND dimensions = 768;
+
+SELECT count(*) AS stale_vectors
+FROM mimo.semantic_embeddings e
+JOIN mimo.search_chunks c ON c.id=e.chunk_id
+WHERE e.content_hash IS DISTINCT FROM c.content_hash;
+```
 
 For rollback, stop the worker, deploy the previous Mimo binary, and leave migration 003 in place. The new tables are additive and unused by the previous binary; do not drop them while any newer binary may run. Re-enable the worker after correcting the Ollama URL/model or database migration issue.
 

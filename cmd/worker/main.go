@@ -15,6 +15,8 @@ import (
 	"github.com/mimo/personal-os/internal/embedding"
 )
 
+const maxEmbeddingAttempts = 8
+
 func main() {
 	c, err := config.Load()
 	if err != nil {
@@ -62,11 +64,14 @@ func processOne(ctx context.Context, db *pgxpool.Pool, ec *embedding.Client) (bo
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE mimo.ingestion_jobs SET status='failed',error_message='maximum embedding attempts reached',next_run_at=now()+interval '1 hour',updated_at=now() WHERE status='running' AND attempts >= $1 AND updated_at<now()-interval '10 minutes'`, maxEmbeddingAttempts); err != nil {
+		return false, err
+	}
 	var jobID int64
 	var chunkID, body, contentHash string
 	err = tx.QueryRow(ctx, `SELECT j.id,j.chunk_id::text,c.body,c.content_hash FROM mimo.ingestion_jobs j JOIN mimo.search_chunks c ON c.id=j.chunk_id
- WHERE j.model_id=$1 AND ( (j.status IN('pending','failed') AND j.next_run_at<=now()) OR (j.status='running' AND j.updated_at<now()-interval '10 minutes') )
-	ORDER BY j.next_run_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, ec.Model).Scan(&jobID, &chunkID, &body, &contentHash)
+	 WHERE j.model_id=$1 AND ( (j.status IN('pending','failed') AND j.attempts < $2 AND j.next_run_at<=now()) OR (j.status='running' AND j.attempts < $2 AND j.updated_at<now()-interval '10 minutes') )
+	ORDER BY j.next_run_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, ec.Model, maxEmbeddingAttempts).Scan(&jobID, &chunkID, &body, &contentHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
