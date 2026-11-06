@@ -7,7 +7,7 @@
 ## What's inside
 
 - `cmd/api` — Go API, limited to owner identity in backend config, Bearer API token, JSON validation
-- `cmd/migrate` — idempotent baseline migration compatible with your Mimo v0.2 `mimo` schema; manual migration tool (not a schema-diff system)
+- `cmd/migrate` — checksum-tracked, advisory-locked migration runner with legacy baseline and status commands
 - `cmd/worker` — durable background indexing through the separately deployed Ollama EmbeddingGemma service
 - `internal/app` — notes CRUD with revisions, objects CRUD, memory write/list/delete, R2 media upload, search, finance accounts/categories/transactions/summary
 - `openclaw-plugin` — thin TypeScript native OpenClaw tools calling HTTP Go backend
@@ -43,7 +43,7 @@ docker compose up -d
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-`DATABASE_URL` should be direct for migrations and can be pooled for the API. If you want separate URLs, temporarily set direct URL when running the migration, then change it to the pooled URL before starting `compose`. **Don't put `.env` in source control.** For a one-time schema migration on an existing v0.2 database, take a backup or test against a Neon branch first.
+`DATABASE_URL` should be direct for migrations and can be pooled for the API. If you want separate URLs, temporarily set direct URL when running the migration, then change it to the pooled URL before starting `compose`. **Don't put `.env` in source control.** For an existing v0.2 database, the migration runner validates and baselines historical `001_init.sql`/`002_finance_liabilities.sql` instead of re-executing them. See [docs/migrations.md](docs/migrations.md) for `status`, `baseline`, recovery, and checksum rules.
 
 Alternatively run locally using:
 
