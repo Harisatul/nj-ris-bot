@@ -34,6 +34,25 @@ function pathID(id: unknown): string {
 function result(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
 }
+
+function compactSearch(data: any) {
+  if (!data || !Array.isArray(data.results)) return data;
+
+  return {
+    semantic_enabled: data.semantic_enabled,
+    warning: data.warning || undefined,
+    results: data.results.slice(0, 5).map((r: any) => ({
+      source_type: r.source_type,
+      source_id: r.source_id,
+      snippet: typeof r.snippet === "string"
+        ? r.snippet.slice(0, 400)
+        : "",
+      score: r.score,
+      lexical: r.lexical,
+      semantic: r.semantic,
+    })),
+  };
+}
 const S = Type.String;
 const opt = Type.Optional;
 function register(api: any, name: string, description: string, parameters: any,
@@ -90,7 +109,13 @@ export default {
       async (_id, p) => request("POST", "/v1/memory/search", select(p, ["query", "limit", "min_similarity"])));
     register(api, "mimo_search", "Find stored notes, objects, memory, or photo captions; returns source IDs. Do not invent missing results.",
       Type.Object({ query: S({ minLength: 2 }), limit: opt(Type.Integer({ minimum: 1, maximum: 30 })) }),
-      async (_id, p) => request("POST", "/v1/search", select(p, ["query", "limit"])));
+      async (_id, p) => {
+        const response = await request("POST", "/v1/search", {
+          query: p.query,
+          limit: Math.min(Number(p.limit ?? 5), 5),
+        });
+        return compactSearch(response);
+      });
     register(api, "mimo_finance_accounts", "Create/list/get asset and liability accounts with database-calculated IDR balances and available credit.",
       Type.Object({ action: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("get")]), id: opt(S()), name: opt(S()), kind: opt(S()), classification: opt(S()), opening_balance_idr: opt(Type.Integer()), credit_limit_idr: opt(Type.Integer()) }),
       async (_id, p) => { if (p.action === "list") return request("GET", "/v1/finance/accounts"); if (p.action === "get") return request("GET", `/v1/finance/accounts/${pathID(p.id)}`); return request("POST", "/v1/finance/accounts", select(p, ["name", "kind", "classification", "opening_balance_idr", "credit_limit_idr"])); });

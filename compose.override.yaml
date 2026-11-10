@@ -1,0 +1,15 @@
+services:
+  api:
+    networks:
+      - default
+      - embedding_net
+
+  worker:
+    networks:
+      - default
+      - embedding_net
+
+networks:
+  embedding_net:
+    external: true
+    name: embeddings-engine_default

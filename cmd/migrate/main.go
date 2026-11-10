@@ -44,7 +44,11 @@ func main() {
 	}
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	dir := fs.String("dir", defaultMigrationDir, "migration directory")
-	_ = fs.Parse(os.Args[2:])
+	args := []string{}
+if len(os.Args) > 2 {
+    args = os.Args[2:]
+}
+_ = fs.Parse(args)
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
 		fatal(errors.New("DATABASE_URL is required"))

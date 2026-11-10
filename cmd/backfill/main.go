@@ -73,7 +73,7 @@ func run(ctx context.Context, db *pgxpool.Pool, ownerID, model string, dryRun, r
 
 	if result.MemoryChunksChanged, err = changedChunks(ctx, tx, `
 WITH source AS (
- SELECT id,owner_id,concat_ws(' ',coalesce(title,''),coalesce(summary,'')) AS body
+ SELECT id,scope_id AS owner_id,concat_ws(' ',coalesce(title,''),coalesce(summary,'')) AS body
  FROM mimo.memory_entries
  WHERE scope_type='personal' AND scope_id=$1 AND status='active'
    AND (expires_at IS NULL OR expires_at>now())

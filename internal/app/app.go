@@ -171,7 +171,7 @@ func (a *App) index(ctx context.Context, tx pgx.Tx, source, id, body string) err
 	err := tx.QueryRow(ctx, `INSERT INTO mimo.search_chunks(owner_id,source_type,source_id,body,content_hash)
  VALUES($1,$2,$3::uuid,$4,$5)
  ON CONFLICT(owner_id,source_type,source_id) DO UPDATE SET body=EXCLUDED.body,content_hash=EXCLUDED.content_hash,updated_at=now()
- RETURNING id::text`, a.C.OwnerID, source, id, body).Scan(&chunkID)
+ RETURNING id::text`, a.C.OwnerID, source, id, body, hash).Scan(&chunkID)
 	if err != nil {
 		return err
 	}
