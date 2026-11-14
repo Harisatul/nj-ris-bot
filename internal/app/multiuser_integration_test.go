@@ -31,7 +31,7 @@ func TestMultiUserIsolationIntegration(t *testing.T) {
 	if _, err = db.Exec(ctx, `DROP SCHEMA IF EXISTS mimo CASCADE`); err != nil {
 		t.Fatal(err)
 	}
-	for i := 1; i <= 4; i++ {
+	for i := 1; i <= 5; i++ {
 		body, e := os.ReadFile(filepath.Join("..", "..", "db", "migrations", migrationName(i)))
 		if e != nil {
 			t.Fatal(e)
@@ -41,7 +41,7 @@ func TestMultiUserIsolationIntegration(t *testing.T) {
 		}
 	}
 	seedMultiUser(t, ctx, db)
-	a := New(db, config.Config{APIToken: "legacy-test-token-which-is-long-enough", OwnerID: "haris"})
+	a := New(db, config.Config{APIToken: "legacy-test-token-which-is-long-enough", OwnerID: "me"})
 	h := a.Routes()
 
 	harisNote := apiJSON(t, h, "neura-token", http.MethodPost, "/v1/notes", `{"title":"Haris private","content":"private"}`, http.StatusCreated)
@@ -49,11 +49,28 @@ func TestMultiUserIsolationIntegration(t *testing.T) {
 	apiJSON(t, h, "najwa-token", http.MethodGet, "/v1/notes/"+noteID, "", http.StatusNotFound)
 	apiJSON(t, h, "neura-token", http.MethodGet, "/v1/notes/"+noteID, "", http.StatusOK)
 	apiJSON(t, h, "najwa-token", http.MethodPost, "/v1/notes", `{"title":"Najwa private","content":"private"}`, http.StatusCreated)
+	if _, err = db.Exec(ctx, `UPDATE mimo.agent_credentials SET default_workspace_id=(SELECT id FROM mimo.workspaces WHERE slug='personal-najwa') WHERE name='neura'`); err != nil {
+		t.Fatal(err)
+	}
+	apiJSON(t, h, "neura-token", http.MethodGet, "/v1/notes", "", http.StatusForbidden)
+	if _, err = db.Exec(ctx, `UPDATE mimo.agent_credentials SET default_workspace_id=(SELECT id FROM mimo.workspaces WHERE slug='personal-haris') WHERE name='neura'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE mimo.agent_credentials SET default_workspace_id=(SELECT id FROM mimo.workspaces WHERE slug='personal-haris') WHERE name='najwa'`); err != nil {
+		t.Fatal(err)
+	}
+	apiJSON(t, h, "najwa-token", http.MethodGet, "/v1/notes", "", http.StatusForbidden)
+	if _, err = db.Exec(ctx, `UPDATE mimo.agent_credentials SET default_workspace_id=(SELECT id FROM mimo.workspaces WHERE slug='personal-najwa') WHERE name='najwa'`); err != nil {
+		t.Fatal(err)
+	}
 	harisAccount := apiJSON(t, h, "neura-token", http.MethodPost, "/v1/finance/accounts", `{"name":"Haris cash","kind":"cash"}`, http.StatusCreated)
 
 	apiJSON(t, h, "nara-token", http.MethodGet, "/v1/finance/accounts", "", http.StatusForbidden)
 	apiJSON(t, h, "nara-token", http.MethodPost, "/v1/memory/search", `{"query":"private"}`, http.StatusForbidden)
 	apiJSON(t, h, "najwa-token", http.MethodGet, "/v1/finance/accounts/"+harisAccount["id"].(string), "", http.StatusNotFound)
+	najwaAccount := apiJSON(t, h, "najwa-token", http.MethodPost, "/v1/finance/accounts", `{"name":"Najwa cash","kind":"cash"}`, http.StatusCreated)
+	apiJSON(t, h, "neura-token", http.MethodGet, "/v1/finance/accounts/"+najwaAccount["id"].(string), "", http.StatusNotFound)
+	apiJSON(t, h, "haris-human-token", http.MethodGet, "/v1/notes", "", http.StatusForbidden)
 
 	source := apiJSON(t, h, "nara-token", http.MethodPost, "/v1/knowledge/sources", `{"workspace":"shared","source_type":"book","title":"Shared book"}`, http.StatusCreated)
 	apiJSON(t, h, "nara-token", http.MethodPost, "/v1/moments", `{"workspace":"shared","title":"Shared dinner","description":"A moment"}`, http.StatusCreated)
@@ -61,6 +78,8 @@ func TestMultiUserIsolationIntegration(t *testing.T) {
 	apiJSON(t, h, "nara-token", http.MethodPost, "/v1/knowledge/discussions", `{"workspace":"shared","title":"Discussion","body":"perspectives","perspectives":[{"author":"haris","argument":"A"},{"author":"najwa","argument":"B"}],"synthesis":"AI synthesis","authored_by":"ai"}`, http.StatusCreated)
 	apiJSON(t, h, "nara-token", http.MethodPost, "/v1/knowledge/search", `{"workspace":"shared","query":"evidence"}`, http.StatusOK)
 	apiJSON(t, h, "neura-token", http.MethodPost, "/v1/knowledge/search", `{"workspace":"shared","query":"evidence"}`, http.StatusForbidden)
+	apiJSON(t, h, "legacy-test-token-which-is-long-enough", http.MethodGet, "/v1/finance/accounts", "", http.StatusOK)
+	apiJSON(t, h, "unmapped-token", http.MethodGet, "/v1/notes", "", http.StatusForbidden)
 	var indexed int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM mimo.search_chunks WHERE owner_id=(SELECT id::text FROM mimo.workspaces WHERE slug='shared') AND source_type IN ('knowledge_note','knowledge_discussion','moment')`).Scan(&indexed); err != nil {
 		t.Fatal(err)
@@ -79,27 +98,34 @@ func TestMultiUserIsolationIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	apiJSON(t, h, "nara-token", http.MethodPost, "/v1/knowledge/search", `{"workspace":"shared","query":"evidence"}`, http.StatusForbidden)
+	if _, err = db.Exec(ctx, `UPDATE mimo.workspace_members SET revoked_at=now() WHERE workspace_id=(SELECT id FROM mimo.workspaces WHERE slug='personal-haris') AND principal_id=(SELECT id FROM mimo.principals WHERE slug='neura')`); err != nil {
+		t.Fatal(err)
+	}
+	apiJSON(t, h, "neura-token", http.MethodGet, "/v1/notes", "", http.StatusForbidden)
 }
 
 func migrationName(i int) string {
-	return map[int]string{1: "001_init.sql", 2: "002_finance_liabilities.sql", 3: "003_embedding.sql", 4: "004_multiuser_knowledge_moments.sql"}[i]
+	return map[int]string{1: "001_init.sql", 2: "002_finance_liabilities.sql", 3: "003_embedding.sql", 4: "004_multiuser_knowledge_moments.sql", 5: "005_personal_owner_binding.sql"}[i]
 }
 
 func seedMultiUser(t *testing.T, ctx context.Context, db *pgxpool.Pool) {
 	t.Helper()
 	_, err := db.Exec(ctx, `INSERT INTO mimo.principals(id,slug,kind,display_name) VALUES
-('00000000-0000-0000-0000-000000000011','haris','human','Haris'),('00000000-0000-0000-0000-000000000012','najwa','human','Najwa'),('00000000-0000-0000-0000-000000000021','neura','agent','Neura'),('00000000-0000-0000-0000-000000000022','najwa-agent','agent','Najwa agent'),('00000000-0000-0000-0000-000000000023','nara','agent','Nara');
+('00000000-0000-0000-0000-000000000011','haris','human','Haris'),('00000000-0000-0000-0000-000000000012','najwa','human','Najwa'),('00000000-0000-0000-0000-000000000021','neura','agent','Neura'),('00000000-0000-0000-0000-000000000022','najwa-agent','agent','Najwa agent'),('00000000-0000-0000-0000-000000000023','nara','agent','Nara'),('00000000-0000-0000-0000-000000000024','unmapped-agent','agent','Unmapped agent');
 INSERT INTO mimo.workspaces(id,slug,name,kind) VALUES
 ('00000000-0000-0000-0000-000000000101','personal-haris','Haris private','personal'),('00000000-0000-0000-0000-000000000102','personal-najwa','Najwa private','personal'),('00000000-0000-0000-0000-000000000103','shared','Shared couple','shared');
 INSERT INTO mimo.workspace_members(workspace_id,principal_id,role) VALUES
-('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000011','owner'),('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000021','agent'),('00000000-0000-0000-0000-000000000102','00000000-0000-0000-0000-000000000012','owner'),('00000000-0000-0000-0000-000000000102','00000000-0000-0000-0000-000000000022','agent'),('00000000-0000-0000-0000-000000000103','00000000-0000-0000-0000-000000000011','owner'),('00000000-0000-0000-0000-000000000103','00000000-0000-0000-0000-000000000012','owner'),('00000000-0000-0000-0000-000000000103','00000000-0000-0000-0000-000000000023','agent');
+('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000011','owner'),('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000021','agent'),('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000023','agent'),('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000024','agent'),('00000000-0000-0000-0000-000000000102','00000000-0000-0000-0000-000000000012','owner'),('00000000-0000-0000-0000-000000000102','00000000-0000-0000-0000-000000000022','agent'),('00000000-0000-0000-0000-000000000102','00000000-0000-0000-0000-000000000021','agent'),('00000000-0000-0000-0000-000000000103','00000000-0000-0000-0000-000000000011','owner'),('00000000-0000-0000-0000-000000000103','00000000-0000-0000-0000-000000000012','owner'),('00000000-0000-0000-0000-000000000103','00000000-0000-0000-0000-000000000023','agent');
 INSERT INTO mimo.permissions(principal_id,workspace_id,permission) VALUES
 ('00000000-0000-0000-0000-000000000021','00000000-0000-0000-0000-000000000101','memory:read'),('00000000-0000-0000-0000-000000000021','00000000-0000-0000-0000-000000000101','memory:write'),('00000000-0000-0000-0000-000000000021','00000000-0000-0000-0000-000000000101','finance:read'),('00000000-0000-0000-0000-000000000021','00000000-0000-0000-0000-000000000101','finance:write'),
 ('00000000-0000-0000-0000-000000000022','00000000-0000-0000-0000-000000000102','memory:read'),('00000000-0000-0000-0000-000000000022','00000000-0000-0000-0000-000000000102','memory:write'),('00000000-0000-0000-0000-000000000022','00000000-0000-0000-0000-000000000102','finance:read'),('00000000-0000-0000-0000-000000000022','00000000-0000-0000-0000-000000000102','finance:write'),
 ('00000000-0000-0000-0000-000000000023','00000000-0000-0000-0000-000000000103','knowledge:read'),('00000000-0000-0000-0000-000000000023','00000000-0000-0000-0000-000000000103','knowledge:write'),('00000000-0000-0000-0000-000000000023','00000000-0000-0000-0000-000000000103','moments:read'),('00000000-0000-0000-0000-000000000023','00000000-0000-0000-0000-000000000103','moments:write'),('00000000-0000-0000-0000-000000000023','00000000-0000-0000-0000-000000000103','legacy:manage'),
-('00000000-0000-0000-0000-000000000011','00000000-0000-0000-0000-000000000103','legacy:manage'),('00000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000103','legacy:manage');
-INSERT INTO mimo.agent_credentials(name,agent_principal_id,owner_id,token_hash) VALUES
-('neura','00000000-0000-0000-0000-000000000021','haris', $1),('najwa','00000000-0000-0000-0000-000000000022','najwa', $2),('nara','00000000-0000-0000-0000-000000000023','nara', $3),('haris-human','00000000-0000-0000-0000-000000000011','haris', $4),('najwa-human','00000000-0000-0000-0000-000000000012','najwa', $5)`, pgx.QueryExecModeSimpleProtocol, tokenHash("neura-token"), tokenHash("najwa-token"), tokenHash("nara-token"), tokenHash("haris-human-token"), tokenHash("najwa-human-token"))
+('00000000-0000-0000-0000-000000000011','00000000-0000-0000-0000-000000000103','legacy:manage'),('00000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000103','legacy:manage'),
+('00000000-0000-0000-0000-000000000021','00000000-0000-0000-0000-000000000102','memory:read'),('00000000-0000-0000-0000-000000000022','00000000-0000-0000-0000-000000000101','memory:read'),('00000000-0000-0000-0000-000000000023','00000000-0000-0000-0000-000000000101','memory:read'),('00000000-0000-0000-0000-000000000024','00000000-0000-0000-0000-000000000101','memory:read');
+INSERT INTO mimo.personal_workspace_owners(workspace_id,owner_id,human_principal_id) VALUES
+('00000000-0000-0000-0000-000000000101','me','00000000-0000-0000-0000-000000000011'),('00000000-0000-0000-0000-000000000102','najwa','00000000-0000-0000-0000-000000000012');
+INSERT INTO mimo.agent_credentials(name,agent_principal_id,owner_id,default_workspace_id,token_hash) VALUES
+('neura','00000000-0000-0000-0000-000000000021','me','00000000-0000-0000-0000-000000000101', $1),('najwa','00000000-0000-0000-0000-000000000022','najwa','00000000-0000-0000-0000-000000000102', $2),('nara','00000000-0000-0000-0000-000000000023','me','00000000-0000-0000-0000-000000000101', $3),('haris-human','00000000-0000-0000-0000-000000000011','',NULL, $4),('najwa-human','00000000-0000-0000-0000-000000000012','',NULL, $5),('unmapped','00000000-0000-0000-0000-000000000024','not-mapped','00000000-0000-0000-0000-000000000101', $6)`, pgx.QueryExecModeSimpleProtocol, tokenHash("neura-token"), tokenHash("najwa-token"), tokenHash("nara-token"), tokenHash("haris-human-token"), tokenHash("najwa-human-token"), tokenHash("unmapped-token"))
 	if err != nil {
 		t.Fatal(err)
 	}

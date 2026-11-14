@@ -12,11 +12,12 @@ import (
 )
 
 type identity struct {
-	CredentialID string
-	Agent        string
-	OwnerID      string
-	PrincipalID  string
-	Legacy       bool
+	CredentialID       string
+	Agent              string
+	OwnerID            string
+	PrincipalID        string
+	DefaultWorkspaceID string
+	Legacy             bool
 }
 type identityKey struct{}
 
@@ -53,15 +54,15 @@ func (a *App) authorize(next http.Handler) http.Handler {
 			return
 		}
 		var in identity
-		err := a.DB.QueryRow(r.Context(), `SELECT c.id::text,p.slug,coalesce(c.owner_id,''),p.id::text
+		err := a.DB.QueryRow(r.Context(), `SELECT c.id::text,p.slug,coalesce(c.owner_id,''),p.id::text,coalesce(c.default_workspace_id::text,'')
  FROM mimo.agent_credentials c JOIN mimo.principals p ON p.id=c.agent_principal_id
- WHERE c.token_hash=$1 AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at>now())`, tokenHash(token)).Scan(&in.CredentialID, &in.Agent, &in.OwnerID, &in.PrincipalID)
+	 WHERE c.token_hash=$1 AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at>now())`, tokenHash(token)).Scan(&in.CredentialID, &in.Agent, &in.OwnerID, &in.PrincipalID, &in.DefaultWorkspaceID)
+		// A credential with no owner or no default workspace is intentionally
+		// still authenticated for shared-domain checks, but can never authorize
+		// personal-domain access.
 		if err == nil {
-			if in.OwnerID == "" {
-				in.OwnerID = in.Agent
-			}
 			_, _ = a.DB.Exec(r.Context(), `UPDATE mimo.agent_credentials SET last_used_at=now() WHERE id=$1::uuid`, in.CredentialID)
-			if permission := personalRoutePermission(r); permission != "" && !a.hasPersonalPermission(r.Context(), in.PrincipalID, permission) {
+			if permission := personalRoutePermission(r); permission != "" && !a.hasBoundPersonalPermission(r.Context(), in, permission) {
 				jsonErr(w, http.StatusForbidden, "insufficient personal-data permission")
 				return
 			}
@@ -105,9 +106,25 @@ func personalRoutePermission(r *http.Request) string {
 	return ""
 }
 
-func (a *App) hasPersonalPermission(ctx context.Context, principalID, permission string) bool {
+func (a *App) hasBoundPersonalPermission(ctx context.Context, in identity, permission string) bool {
 	var ok bool
-	err := a.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mimo.permissions p JOIN mimo.workspaces w ON w.id=p.workspace_id JOIN mimo.workspace_members m ON m.workspace_id=w.id AND m.principal_id=p.principal_id WHERE p.principal_id=$1::uuid AND w.kind='personal' AND p.permission=$2 AND m.revoked_at IS NULL)`, principalID, permission).Scan(&ok)
+	err := a.DB.QueryRow(ctx, `SELECT EXISTS(
+ SELECT 1
+ FROM mimo.agent_credentials c
+ JOIN mimo.principals agent ON agent.id=c.agent_principal_id
+ JOIN mimo.personal_workspace_owners pwo ON pwo.owner_id=c.owner_id AND pwo.workspace_id=c.default_workspace_id
+ JOIN mimo.workspaces w ON w.id=pwo.workspace_id AND w.kind='personal'
+ JOIN mimo.principals human ON human.id=pwo.human_principal_id AND human.kind='human'
+ JOIN mimo.workspace_members hm ON hm.workspace_id=w.id AND hm.principal_id=human.id AND hm.role='owner' AND hm.revoked_at IS NULL
+ JOIN mimo.workspace_members am ON am.workspace_id=w.id AND am.principal_id=c.agent_principal_id AND am.revoked_at IS NULL
+ JOIN mimo.permissions p ON p.workspace_id=w.id AND p.principal_id=c.agent_principal_id AND p.permission=$2
+ WHERE c.id=$1::uuid
+   AND nullif(btrim(c.owner_id),'') IS NOT NULL
+   AND nullif(c.default_workspace_id::text,'') IS NOT NULL
+   AND agent.slug <> 'nara'
+   AND c.owner_id=$3
+   AND c.default_workspace_id=$4::uuid
+)`, in.CredentialID, permission, in.OwnerID, in.DefaultWorkspaceID).Scan(&ok)
 	return err == nil && ok
 }
 
