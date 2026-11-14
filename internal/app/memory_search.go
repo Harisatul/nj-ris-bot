@@ -55,7 +55,7 @@ WHERE c.owner_id=$1 AND c.source_type='memory' AND e.model_id=$2
   AND m.status='active' AND (m.expires_at IS NULL OR m.expires_at>now())
   AND (1-(e.embedding <=> ($3::text)::vector)) >= $5
 ORDER BY e.embedding <=> ($3::text)::vector
-		LIMIT $6`, a.C.OwnerID, a.C.EmbeddingModel, vectorText(vector), a.C.EmbeddingDimensions, minSimilarity, d.Limit)
+		LIMIT $6`, a.owner(r.Context()), a.C.EmbeddingModel, vectorText(vector), a.C.EmbeddingDimensions, minSimilarity, d.Limit)
 	if err != nil {
 		internalErr(w, err)
 		return

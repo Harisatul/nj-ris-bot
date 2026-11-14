@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +63,16 @@ func (a *App) Routes() http.Handler {
 		r.Delete("/v1/memories/{id}", a.memoryDelete)
 		r.Post("/v1/memory/search", a.memorySemanticSearch)
 		r.Post("/v1/search", a.search)
+		r.Post("/v1/knowledge/sources", a.knowledgeSourceCreate)
+		r.Post("/v1/knowledge/notes", a.knowledgeNoteCreate)
+		r.Post("/v1/knowledge/discussions", a.knowledgeDiscussionCreate)
+		r.Post("/v1/knowledge/search", a.knowledgeSearch)
+		r.Post("/v1/moments", a.momentCapture)
+		r.Post("/v1/moments/search", a.momentSearch)
+		r.Post("/v1/legacy/collections", a.legacyCollectionCreate)
+		r.Post("/v1/legacy/collections/{id}/approve", a.legacyCollectionApprove)
+		r.Get("/v1/legacy/collections/{id}/export", a.exportLegacy)
+		r.Post("/v1/sharing", a.sharingManage)
 		r.Post("/v1/finance/accounts", a.financeAccountCreate)
 		r.Get("/v1/finance/accounts", a.financeAccounts)
 		r.Get("/v1/finance/accounts/{id}", a.financeAccountGet)
@@ -80,21 +89,6 @@ func (a *App) Routes() http.Handler {
 		r.Post("/v1/finance/installments/{id}/payments", a.financeInstallmentPay)
 	})
 	return r
-}
-func (a *App) authorize(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
-			jsonErr(w, 401, "Bearer token required")
-			return
-		}
-		auth := strings.TrimPrefix(header, "Bearer ")
-		if len(auth) != len(a.C.APIToken) || subtle.ConstantTimeCompare([]byte(auth), []byte(a.C.APIToken)) != 1 {
-			jsonErr(w, 401, "invalid API token")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 func jsonOK(w http.ResponseWriter, x any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -162,7 +156,7 @@ func many(ctx context.Context, db interface {
 }
 func isNotFound(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 func (a *App) audit(ctx context.Context, tx pgx.Tx, action, resID string) error {
-	_, err := tx.Exec(ctx, `INSERT INTO mimo.audit_events(principal,scope_type,scope_id,action,resource_id,outcome) VALUES($1,'personal',$1,$2,$3::uuid,'allowed')`, a.C.OwnerID, action, resID)
+	_, err := tx.Exec(ctx, `INSERT INTO mimo.audit_events(principal,scope_type,scope_id,action,resource_id,outcome) VALUES($1,'personal',$1,$2,$3::uuid,'allowed')`, a.owner(ctx), action, resID)
 	return err
 }
 func (a *App) index(ctx context.Context, tx pgx.Tx, source, id, body string) error {
@@ -171,7 +165,7 @@ func (a *App) index(ctx context.Context, tx pgx.Tx, source, id, body string) err
 	err := tx.QueryRow(ctx, `INSERT INTO mimo.search_chunks(owner_id,source_type,source_id,body,content_hash)
  VALUES($1,$2,$3::uuid,$4,$5)
  ON CONFLICT(owner_id,source_type,source_id) DO UPDATE SET body=EXCLUDED.body,content_hash=EXCLUDED.content_hash,updated_at=now()
- RETURNING id::text`, a.C.OwnerID, source, id, body, hash).Scan(&chunkID)
+ RETURNING id::text`, a.owner(ctx), source, id, body, hash).Scan(&chunkID)
 	if err != nil {
 		return err
 	}
@@ -182,7 +176,27 @@ func (a *App) index(ctx context.Context, tx pgx.Tx, source, id, body string) err
 	}
 	return err
 }
+
+// indexWorkspace keeps shared-domain indexing isolated by workspace UUID. It is
+// intentionally best-effort: a slow or unavailable embedding worker must not
+// make an otherwise valid knowledge or moment write fail.
+func (a *App) indexWorkspace(ctx context.Context, workspaceID, source, sourceID, body string) error {
+	hash := embedding.ContentHash(body)
+	_, err := a.DB.Exec(ctx, `INSERT INTO mimo.search_chunks(owner_id,source_type,source_id,body,content_hash)
+VALUES($1,$2,$3::uuid,$4,$5)
+ON CONFLICT(owner_id,source_type,source_id) DO UPDATE SET body=EXCLUDED.body,content_hash=EXCLUDED.content_hash,updated_at=now()`, workspaceID, source, sourceID, body, hash)
+	if err != nil {
+		return err
+	}
+	if a.Embed == nil {
+		return nil
+	}
+	_, err = a.DB.Exec(ctx, `INSERT INTO mimo.ingestion_jobs(chunk_id,model_id,content_hash,status,attempts,next_run_at)
+SELECT id,$2,$3,'pending',0,now() FROM mimo.search_chunks WHERE owner_id=$1 AND source_type=$4 AND source_id=$5::uuid
+ON CONFLICT(chunk_id,model_id) DO UPDATE SET content_hash=EXCLUDED.content_hash,status='pending',attempts=0,next_run_at=now(),updated_at=now()`, workspaceID, a.C.EmbeddingModel, hash, source, sourceID)
+	return err
+}
 func (a *App) unindex(ctx context.Context, tx pgx.Tx, source, id string) error {
-	_, err := tx.Exec(ctx, `DELETE FROM mimo.search_chunks WHERE owner_id=$1 AND source_type=$2 AND source_id=$3::uuid`, a.C.OwnerID, source, id)
+	_, err := tx.Exec(ctx, `DELETE FROM mimo.search_chunks WHERE owner_id=$1 AND source_type=$2 AND source_id=$3::uuid`, a.owner(ctx), source, id)
 	return err
 }

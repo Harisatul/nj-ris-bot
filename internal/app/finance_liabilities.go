@@ -45,7 +45,7 @@ func (a *App) financeAccountGet(w http.ResponseWriter, r *http.Request) {
  (a.opening_balance_idr + coalesce((SELECT sum(CASE WHEN a.classification='asset' AND t.to_account_id=a.id THEN t.amount_idr WHEN a.classification='asset' AND t.from_account_id=a.id THEN -t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type IN ('liability_purchase','liability_fee') THEN t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type='debt_repayment' THEN -t.amount_idr ELSE 0 END) FROM mimo.finance_transactions t WHERE t.owner_id=$1 AND t.status='posted' AND (t.to_account_id=a.id OR t.from_account_id=a.id)),0)) AS balance_idr,
  CASE WHEN a.classification='liability' AND a.credit_limit_idr IS NOT NULL THEN a.credit_limit_idr - (a.opening_balance_idr + coalesce((SELECT sum(CASE WHEN t.to_account_id=a.id AND t.type IN ('liability_purchase','liability_fee') THEN t.amount_idr WHEN t.to_account_id=a.id AND t.type='debt_repayment' THEN -t.amount_idr ELSE 0 END) FROM mimo.finance_transactions t WHERE t.owner_id=$1 AND t.status='posted' AND (t.to_account_id=a.id OR t.from_account_id=a.id)),0)) END AS available_credit_idr
  FROM mimo.finance_accounts a WHERE a.owner_id=$1 AND a.id=$2::uuid AND a.archived_at IS NULL`
-	out, err := one(r.Context(), a.DB, q, a.C.OwnerID, id(r))
+	out, err := one(r.Context(), a.DB, q, a.owner(r.Context()), id(r))
 	if isNotFound(err) {
 		jsonErr(w, 404, "account not found")
 		return
@@ -86,7 +86,7 @@ func (a *App) financeLiabilityPurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.CategoryID != "" {
 		var ok bool
-		if err = a.DB.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM mimo.finance_categories WHERE owner_id=$1 AND id=$2::uuid AND kind='expense')`, a.C.OwnerID, d.CategoryID).Scan(&ok); err != nil || !ok {
+		if err = a.DB.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM mimo.finance_categories WHERE owner_id=$1 AND id=$2::uuid AND kind='expense')`, a.owner(r.Context()), d.CategoryID).Scan(&ok); err != nil || !ok {
 			jsonErr(w, 400, "invalid expense category")
 			return
 		}
@@ -107,30 +107,30 @@ func (a *App) financeLiabilityPurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	var classification string
-	if err = tx.QueryRow(ctx, `SELECT classification FROM mimo.finance_accounts WHERE owner_id=$1 AND id=$2::uuid AND archived_at IS NULL FOR UPDATE`, a.C.OwnerID, d.LiabilityAccountID).Scan(&classification); err != nil || classification != "liability" {
+	if err = tx.QueryRow(ctx, `SELECT classification FROM mimo.finance_accounts WHERE owner_id=$1 AND id=$2::uuid AND archived_at IS NULL FOR UPDATE`, a.owner(ctx), d.LiabilityAccountID).Scan(&classification); err != nil || classification != "liability" {
 		jsonErr(w, 400, "liability account not found")
 		return
 	}
 	if idem != "" {
 		var priorID, priorHash string
-		if e := tx.QueryRow(ctx, `SELECT id::text,request_hash FROM mimo.finance_transactions WHERE owner_id=$1 AND idempotency_key=$2`, a.C.OwnerID, idem).Scan(&priorID, &priorHash); e == nil {
+		if e := tx.QueryRow(ctx, `SELECT id::text,request_hash FROM mimo.finance_transactions WHERE owner_id=$1 AND idempotency_key=$2`, a.owner(ctx), idem).Scan(&priorID, &priorHash); e == nil {
 			if priorHash != hash {
 				jsonErr(w, 409, "idempotency key reused with different purchase")
 				return
 			}
 			_ = tx.Commit(ctx)
-			out, _ := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.C.OwnerID, priorID)
+			out, _ := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.owner(ctx), priorID)
 			jsonOK(w, out)
 			return
 		}
 	}
 	var purchaseID string
-	if err = tx.QueryRow(ctx, `INSERT INTO mimo.finance_transactions(owner_id,type,amount_idr,to_account_id,category_id,description,occurred_at,idempotency_key,request_hash) VALUES($1,'liability_purchase',$2,$3::uuid,$4::uuid,$5,coalesce($6,now()),$7,$8) RETURNING id::text`, a.C.OwnerID, d.PrincipalAmountIDR, d.LiabilityAccountID, nullUUID(d.CategoryID), d.Description, d.OccurredAt, nullUUID(idem), hash).Scan(&purchaseID); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO mimo.finance_transactions(owner_id,type,amount_idr,to_account_id,category_id,description,occurred_at,idempotency_key,request_hash) VALUES($1,'liability_purchase',$2,$3::uuid,$4::uuid,$5,coalesce($6,now()),$7,$8) RETURNING id::text`, a.owner(ctx), d.PrincipalAmountIDR, d.LiabilityAccountID, nullUUID(d.CategoryID), d.Description, d.OccurredAt, nullUUID(idem), hash).Scan(&purchaseID); err != nil {
 		internalErr(w, err)
 		return
 	}
 	var debtID string
-	if err = tx.QueryRow(ctx, `INSERT INTO mimo.finance_debts(owner_id,liability_account_id,purchase_transaction_id,principal_idr,total_fee_idr,tenor,first_due_date) VALUES($1,$2::uuid,$3::uuid,$4,$5,$6,$7) RETURNING id::text`, a.C.OwnerID, d.LiabilityAccountID, purchaseID, d.PrincipalAmountIDR, d.TotalFeeIDR, d.Tenor, due).Scan(&debtID); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO mimo.finance_debts(owner_id,liability_account_id,purchase_transaction_id,principal_idr,total_fee_idr,tenor,first_due_date) VALUES($1,$2::uuid,$3::uuid,$4,$5,$6,$7) RETURNING id::text`, a.owner(ctx), d.LiabilityAccountID, purchaseID, d.PrincipalAmountIDR, d.TotalFeeIDR, d.Tenor, due).Scan(&debtID); err != nil {
 		internalErr(w, err)
 		return
 	}
@@ -139,7 +139,7 @@ func (a *App) financeLiabilityPurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.TotalFeeIDR > 0 {
-		if _, err = tx.Exec(ctx, `INSERT INTO mimo.finance_transactions(owner_id,type,amount_idr,to_account_id,description,occurred_at,debt_id,parent_transaction_id) VALUES($1,'liability_fee',$2,$3::uuid,$4,coalesce($5,now()),$6::uuid,$7::uuid)`, a.C.OwnerID, d.TotalFeeIDR, d.LiabilityAccountID, d.Description+" (fee)", d.OccurredAt, debtID, purchaseID); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO mimo.finance_transactions(owner_id,type,amount_idr,to_account_id,description,occurred_at,debt_id,parent_transaction_id) VALUES($1,'liability_fee',$2,$3::uuid,$4,coalesce($5,now()),$6::uuid,$7::uuid)`, a.owner(ctx), d.TotalFeeIDR, d.LiabilityAccountID, d.Description+" (fee)", d.OccurredAt, debtID, purchaseID); err != nil {
 			internalErr(w, err)
 			return
 		}
@@ -159,7 +159,7 @@ func (a *App) financeLiabilityPurchase(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, `SELECT d.id::text AS id,d.principal_idr,d.total_fee_idr,d.tenor,d.first_due_date,d.status,t.id::text AS purchase_transaction_id FROM mimo.finance_debts d JOIN mimo.finance_transactions t ON t.id=d.purchase_transaction_id WHERE d.owner_id=$1 AND d.id=$2::uuid`, a.C.OwnerID, debtID)
+	out, err := one(ctx, a.DB, `SELECT d.id::text AS id,d.principal_idr,d.total_fee_idr,d.tenor,d.first_due_date,d.status,t.id::text AS purchase_transaction_id FROM mimo.finance_debts d JOIN mimo.finance_transactions t ON t.id=d.purchase_transaction_id WHERE d.owner_id=$1 AND d.id=$2::uuid`, a.owner(ctx), debtID)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -169,7 +169,7 @@ func (a *App) financeLiabilityPurchase(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) financeInstallments(w http.ResponseWriter, r *http.Request) {
 	q := `SELECT i.id::text AS id,i.debt_id::text AS debt_id,i.installment_number,i.due_date,i.principal_due_idr,i.fee_due_idr,i.principal_paid_idr,i.fee_paid_idr,CASE WHEN i.principal_paid_idr=i.principal_due_idr AND i.fee_paid_idr=i.fee_due_idr THEN 'paid' WHEN i.principal_paid_idr>0 OR i.fee_paid_idr>0 THEN 'partial' WHEN i.due_date < CURRENT_DATE THEN 'overdue' ELSE 'pending' END AS status,(i.principal_due_idr+i.fee_due_idr-i.principal_paid_idr-i.fee_paid_idr) AS remaining_idr FROM mimo.finance_installments i JOIN mimo.finance_debts d ON d.id=i.debt_id WHERE d.owner_id=$1 AND d.status='open'`
-	args := []any{a.C.OwnerID}
+	args := []any{a.owner(r.Context())}
 	where := ""
 	if v := r.URL.Query().Get("debt_id"); v != "" {
 		where = " AND d.id=$2::uuid"
@@ -224,25 +224,25 @@ func (a *App) financeInstallmentPay(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	if idem != "" {
 		var priorID, priorHash string
-		if e := tx.QueryRow(ctx, `SELECT id::text,request_hash FROM mimo.finance_transactions WHERE owner_id=$1 AND idempotency_key=$2`, a.C.OwnerID, idem).Scan(&priorID, &priorHash); e == nil {
+		if e := tx.QueryRow(ctx, `SELECT id::text,request_hash FROM mimo.finance_transactions WHERE owner_id=$1 AND idempotency_key=$2`, a.owner(ctx), idem).Scan(&priorID, &priorHash); e == nil {
 			if priorHash != hash {
 				jsonErr(w, 409, "idempotency key reused with different payment")
 				return
 			}
 			_ = tx.Commit(ctx)
-			out, _ := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.C.OwnerID, priorID)
+			out, _ := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.owner(ctx), priorID)
 			jsonOK(w, out)
 			return
 		}
 	}
 	var debtID, liabilityID string
 	var principalDue, feeDue, principalPaid, feePaid int64
-	if err = tx.QueryRow(ctx, `SELECT d.id::text,d.liability_account_id::text,i.principal_due_idr,i.fee_due_idr,i.principal_paid_idr,i.fee_paid_idr FROM mimo.finance_installments i JOIN mimo.finance_debts d ON d.id=i.debt_id WHERE i.id=$1::uuid AND d.owner_id=$2 AND d.status='open' FOR UPDATE`, id(r), a.C.OwnerID).Scan(&debtID, &liabilityID, &principalDue, &feeDue, &principalPaid, &feePaid); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT d.id::text,d.liability_account_id::text,i.principal_due_idr,i.fee_due_idr,i.principal_paid_idr,i.fee_paid_idr FROM mimo.finance_installments i JOIN mimo.finance_debts d ON d.id=i.debt_id WHERE i.id=$1::uuid AND d.owner_id=$2 AND d.status='open' FOR UPDATE`, id(r), a.owner(ctx)).Scan(&debtID, &liabilityID, &principalDue, &feeDue, &principalPaid, &feePaid); err != nil {
 		jsonErr(w, 404, "installment not found")
 		return
 	}
 	var assetClass string
-	if err = tx.QueryRow(ctx, `SELECT classification FROM mimo.finance_accounts WHERE id=$1::uuid AND owner_id=$2 AND archived_at IS NULL`, d.AssetAccountID, a.C.OwnerID).Scan(&assetClass); err != nil || assetClass != "asset" {
+	if err = tx.QueryRow(ctx, `SELECT classification FROM mimo.finance_accounts WHERE id=$1::uuid AND owner_id=$2 AND archived_at IS NULL`, d.AssetAccountID, a.owner(ctx)).Scan(&assetClass); err != nil || assetClass != "asset" {
 		jsonErr(w, 400, "asset account not found")
 		return
 	}
@@ -256,7 +256,7 @@ func (a *App) financeInstallmentPay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var txID string
-	if err = tx.QueryRow(ctx, `INSERT INTO mimo.finance_transactions(owner_id,type,amount_idr,from_account_id,to_account_id,description,idempotency_key,request_hash,debt_id) VALUES($1,'debt_repayment',$2,$3::uuid,$4::uuid,$5,$6,$7,$8::uuid) RETURNING id::text`, a.C.OwnerID, d.AmountIDR, d.AssetAccountID, liabilityID, d.Description, nullUUID(idem), hash, debtID).Scan(&txID); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO mimo.finance_transactions(owner_id,type,amount_idr,from_account_id,to_account_id,description,idempotency_key,request_hash,debt_id) VALUES($1,'debt_repayment',$2,$3::uuid,$4::uuid,$5,$6,$7,$8::uuid) RETURNING id::text`, a.owner(ctx), d.AmountIDR, d.AssetAccountID, liabilityID, d.Description, nullUUID(idem), hash, debtID).Scan(&txID); err != nil {
 		internalErr(w, err)
 		return
 	}
@@ -314,7 +314,7 @@ func (a *App) financeInstallmentPay(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.C.OwnerID, txID)
+	out, err := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.owner(ctx), txID)
 	if err != nil {
 		internalErr(w, err)
 		return

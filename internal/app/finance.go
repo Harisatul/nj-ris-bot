@@ -96,12 +96,12 @@ func (a *App) financeAccountCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rid string
-	err := a.DB.QueryRow(r.Context(), `INSERT INTO mimo.finance_accounts(owner_id,name,kind,classification,opening_balance_idr,credit_limit_idr) VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text`, a.C.OwnerID, strings.TrimSpace(d.Name), d.Kind, d.Classification, d.OpeningBalanceIDR, d.CreditLimitIDR).Scan(&rid)
+	err := a.DB.QueryRow(r.Context(), `INSERT INTO mimo.finance_accounts(owner_id,name,kind,classification,opening_balance_idr,credit_limit_idr) VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text`, a.owner(r.Context()), strings.TrimSpace(d.Name), d.Kind, d.Classification, d.OpeningBalanceIDR, d.CreditLimitIDR).Scan(&rid)
 	if err != nil {
 		jsonErr(w, 409, "account name already exists or invalid")
 		return
 	}
-	out, err := one(r.Context(), a.DB, `SELECT id::text AS id,name,kind,classification,opening_balance_idr,credit_limit_idr FROM mimo.finance_accounts WHERE owner_id=$1 AND id=$2::uuid`, a.C.OwnerID, rid)
+	out, err := one(r.Context(), a.DB, `SELECT id::text AS id,name,kind,classification,opening_balance_idr,credit_limit_idr FROM mimo.finance_accounts WHERE owner_id=$1 AND id=$2::uuid`, a.owner(r.Context()), rid)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -120,7 +120,7 @@ func (a *App) financeAccounts(w http.ResponseWriter, r *http.Request) {
  AND (t.to_account_id=a.id OR t.from_account_id=a.id)),0)) AS balance_idr,
  CASE WHEN a.classification='liability' AND a.credit_limit_idr IS NOT NULL THEN a.credit_limit_idr - (a.opening_balance_idr + coalesce((SELECT sum(CASE WHEN t.to_account_id=a.id AND t.type IN ('liability_purchase','liability_fee') THEN t.amount_idr WHEN t.to_account_id=a.id AND t.type='debt_repayment' THEN -t.amount_idr ELSE 0 END) FROM mimo.finance_transactions t WHERE t.owner_id=$1 AND t.status='posted' AND (t.to_account_id=a.id OR t.from_account_id=a.id)),0)) END AS available_credit_idr
  FROM mimo.finance_accounts a WHERE a.owner_id=$1 AND a.archived_at IS NULL ORDER BY a.name`
-	data, err := many(r.Context(), a.DB, q, a.C.OwnerID)
+	data, err := many(r.Context(), a.DB, q, a.owner(r.Context()))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -140,12 +140,12 @@ func (a *App) financeCategoryCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rid string
-	err := a.DB.QueryRow(r.Context(), `INSERT INTO mimo.finance_categories(owner_id,name,kind) VALUES($1,$2,$3) ON CONFLICT(owner_id,name,kind) DO UPDATE SET name=EXCLUDED.name RETURNING id::text`, a.C.OwnerID, strings.TrimSpace(d.Name), d.Kind).Scan(&rid)
+	err := a.DB.QueryRow(r.Context(), `INSERT INTO mimo.finance_categories(owner_id,name,kind) VALUES($1,$2,$3) ON CONFLICT(owner_id,name,kind) DO UPDATE SET name=EXCLUDED.name RETURNING id::text`, a.owner(r.Context()), strings.TrimSpace(d.Name), d.Kind).Scan(&rid)
 	if err != nil {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(r.Context(), a.DB, `SELECT id::text AS id,name,kind FROM mimo.finance_categories WHERE owner_id=$1 AND id=$2::uuid`, a.C.OwnerID, rid)
+	out, err := one(r.Context(), a.DB, `SELECT id::text AS id,name,kind FROM mimo.finance_categories WHERE owner_id=$1 AND id=$2::uuid`, a.owner(r.Context()), rid)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -153,7 +153,7 @@ func (a *App) financeCategoryCreate(w http.ResponseWriter, r *http.Request) {
 	jsonCreated(w, out)
 }
 func (a *App) financeCategories(w http.ResponseWriter, r *http.Request) {
-	data, err := many(r.Context(), a.DB, `SELECT id::text AS id,name,kind FROM mimo.finance_categories WHERE owner_id=$1 ORDER BY kind,name`, a.C.OwnerID)
+	data, err := many(r.Context(), a.DB, `SELECT id::text AS id,name,kind FROM mimo.finance_categories WHERE owner_id=$1 ORDER BY kind,name`, a.owner(r.Context()))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -252,7 +252,7 @@ func (a *App) financeTransactionCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	if err = a.validMoneyRefs(a.C.OwnerID, d, tx, r); err != nil {
+	if err = a.validMoneyRefs(a.owner(ctx), d, tx, r); err != nil {
 		jsonErr(w, 400, "invalid account or category reference")
 		return
 	}
@@ -263,17 +263,17 @@ func (a *App) financeTransactionCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO mimo.finance_transactions(owner_id,type,amount_idr,from_account_id,to_account_id,category_id,description,occurred_at,idempotency_key,request_hash)
  VALUES($1,$2,$3,$4::uuid,$5::uuid,$6::uuid,$7,coalesce($8,now()),$9,$10)
- ON CONFLICT DO NOTHING RETURNING id::text`, a.C.OwnerID, d.Type, d.AmountIDR, nullUUID(d.FromAccountID), nullUUID(d.ToAccountID), nullUUID(d.CategoryID), d.Description, d.OccurredAt, key, hash).Scan(&rid)
+ ON CONFLICT DO NOTHING RETURNING id::text`, a.owner(ctx), d.Type, d.AmountIDR, nullUUID(d.FromAccountID), nullUUID(d.ToAccountID), nullUUID(d.CategoryID), d.Description, d.OccurredAt, key, hash).Scan(&rid)
 	if isNotFound(err) && idem != "" {
 		var prevHash string
-		err = tx.QueryRow(ctx, `SELECT id::text,request_hash FROM mimo.finance_transactions WHERE owner_id=$1 AND idempotency_key=$2`, a.C.OwnerID, idem).Scan(&rid, &prevHash)
+		err = tx.QueryRow(ctx, `SELECT id::text,request_hash FROM mimo.finance_transactions WHERE owner_id=$1 AND idempotency_key=$2`, a.owner(ctx), idem).Scan(&rid, &prevHash)
 		if err == nil && prevHash != hash {
 			jsonErr(w, 409, "idempotency key reused with a different transaction")
 			return
 		}
 		if err == nil {
 			_ = tx.Commit(ctx)
-			out, _ := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.C.OwnerID, rid)
+			out, _ := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.owner(ctx), rid)
 			jsonOK(w, out)
 			return
 		}
@@ -289,7 +289,7 @@ func (a *App) financeTransactionCreate(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.C.OwnerID, rid)
+	out, err := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.owner(ctx), rid)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -298,7 +298,7 @@ func (a *App) financeTransactionCreate(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) financeTransactions(w http.ResponseWriter, r *http.Request) {
 	q := transactionSelect + ` AND status='posted'`
-	args := []any{a.C.OwnerID}
+	args := []any{a.owner(r.Context())}
 	if typ := r.URL.Query().Get("type"); typ != "" {
 		switch typ {
 		case "income", "expense", "transfer", "liability_purchase", "liability_fee", "debt_repayment":
@@ -323,7 +323,7 @@ func (a *App) financeTransactions(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"items": data})
 }
 func (a *App) financeTransactionGet(w http.ResponseWriter, r *http.Request) {
-	data, err := one(r.Context(), a.DB, transactionSelect+` AND id=$2::uuid`, a.C.OwnerID, id(r))
+	data, err := one(r.Context(), a.DB, transactionSelect+` AND id=$2::uuid`, a.owner(r.Context()), id(r))
 	if isNotFound(err) {
 		jsonErr(w, 404, "transaction not found")
 		return
@@ -355,7 +355,7 @@ func (a *App) financeTransactionPatch(w http.ResponseWriter, r *http.Request) {
 	var from, to, cat string
 	var occurred time.Time
 	err = tx.QueryRow(ctx, `SELECT type,amount_idr,coalesce(from_account_id::text,''),coalesce(to_account_id::text,''),coalesce(category_id::text,''),description,occurred_at
- FROM mimo.finance_transactions WHERE owner_id=$1 AND id=$2::uuid AND status='posted' FOR UPDATE`, a.C.OwnerID, id(r)).Scan(&old.Type, &old.AmountIDR, &from, &to, &cat, &old.Description, &occurred)
+ FROM mimo.finance_transactions WHERE owner_id=$1 AND id=$2::uuid AND status='posted' FOR UPDATE`, a.owner(ctx), id(r)).Scan(&old.Type, &old.AmountIDR, &from, &to, &cat, &old.Description, &occurred)
 	if isNotFound(err) {
 		jsonErr(w, 404, "posted transaction not found")
 		return
@@ -384,13 +384,13 @@ func (a *App) financeTransactionPatch(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 400, why)
 		return
 	}
-	if err = a.validMoneyRefs(a.C.OwnerID, old, tx, r); err != nil {
+	if err = a.validMoneyRefs(a.owner(ctx), old, tx, r); err != nil {
 		jsonErr(w, 400, "invalid category")
 		return
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO mimo.finance_transaction_revisions(transaction_id,snapshot) SELECT id,to_jsonb(t) FROM mimo.finance_transactions t WHERE t.owner_id=$1 AND t.id=$2::uuid`, a.C.OwnerID, id(r))
+	_, err = tx.Exec(ctx, `INSERT INTO mimo.finance_transaction_revisions(transaction_id,snapshot) SELECT id,to_jsonb(t) FROM mimo.finance_transactions t WHERE t.owner_id=$1 AND t.id=$2::uuid`, a.owner(ctx), id(r))
 	if err == nil {
-		_, err = tx.Exec(ctx, `UPDATE mimo.finance_transactions SET amount_idr=$1,description=$2,category_id=$3::uuid,occurred_at=$4 WHERE owner_id=$5 AND id=$6::uuid`, old.AmountIDR, old.Description, nullUUID(old.CategoryID), old.OccurredAt, a.C.OwnerID, id(r))
+		_, err = tx.Exec(ctx, `UPDATE mimo.finance_transactions SET amount_idr=$1,description=$2,category_id=$3::uuid,occurred_at=$4 WHERE owner_id=$5 AND id=$6::uuid`, old.AmountIDR, old.Description, nullUUID(old.CategoryID), old.OccurredAt, a.owner(ctx), id(r))
 	}
 	if err == nil {
 		err = a.audit(ctx, tx, "finance.update", id(r))
@@ -402,7 +402,7 @@ func (a *App) financeTransactionPatch(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.C.OwnerID, id(r))
+	out, err := one(ctx, a.DB, transactionSelect+` AND id=$2::uuid`, a.owner(ctx), id(r))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -418,7 +418,7 @@ func (a *App) financeTransactionDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	var txType, debtID string
-	if err := tx.QueryRow(ctx, `SELECT type,coalesce(debt_id::text,'') FROM mimo.finance_transactions WHERE owner_id=$1 AND id=$2::uuid FOR UPDATE`, a.C.OwnerID, id(r)).Scan(&txType, &debtID); isNotFound(err) {
+	if err := tx.QueryRow(ctx, `SELECT type,coalesce(debt_id::text,'') FROM mimo.finance_transactions WHERE owner_id=$1 AND id=$2::uuid FOR UPDATE`, a.owner(ctx), id(r)).Scan(&txType, &debtID); isNotFound(err) {
 		jsonErr(w, 404, "transaction not found")
 		return
 	} else if err != nil {
@@ -467,7 +467,7 @@ func (a *App) financeTransactionDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tag, err := tx.Exec(ctx, `UPDATE mimo.finance_transactions SET status='voided' WHERE owner_id=$1 AND id=$2::uuid AND status='posted'`, a.C.OwnerID, id(r))
+	tag, err := tx.Exec(ctx, `UPDATE mimo.finance_transactions SET status='voided' WHERE owner_id=$1 AND id=$2::uuid AND status='posted'`, a.owner(ctx), id(r))
 	if err != nil {
 		jsonErr(w, 400, "invalid transaction id")
 		return
@@ -508,7 +508,7 @@ func (a *App) financeSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	var expense, income, transfers, cashOutflow int64
 	err := a.DB.QueryRow(r.Context(), `SELECT coalesce(sum(amount_idr) FILTER (WHERE type IN ('expense','liability_purchase','liability_fee')),0),coalesce(sum(amount_idr) FILTER (WHERE type='income'),0),coalesce(sum(amount_idr) FILTER (WHERE type='transfer'),0),coalesce(sum(amount_idr) FILTER (WHERE type IN ('expense','debt_repayment')),0)
- FROM mimo.finance_transactions WHERE owner_id=$1 AND status='posted' AND occurred_at >= $2 AND occurred_at < $3`, a.C.OwnerID, start, end).Scan(&expense, &income, &transfers, &cashOutflow)
+ FROM mimo.finance_transactions WHERE owner_id=$1 AND status='posted' AND occurred_at >= $2 AND occurred_at < $3`, a.owner(r.Context()), start, end).Scan(&expense, &income, &transfers, &cashOutflow)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -516,7 +516,7 @@ func (a *App) financeSummary(w http.ResponseWriter, r *http.Request) {
 	cats, err := many(r.Context(), a.DB, `SELECT coalesce(c.name,'Uncategorized') AS category,t.type,sum(t.amount_idr) AS total_idr,count(*) AS transactions
  FROM mimo.finance_transactions t LEFT JOIN mimo.finance_categories c ON c.id=t.category_id AND c.owner_id=$1
  WHERE t.owner_id=$1 AND t.status='posted' AND t.type<>'transfer' AND t.occurred_at>=$2 AND t.occurred_at<$3
- GROUP BY c.name,t.type ORDER BY total_idr DESC`, a.C.OwnerID, start, end)
+ GROUP BY c.name,t.type ORDER BY total_idr DESC`, a.owner(r.Context()), start, end)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -524,7 +524,7 @@ func (a *App) financeSummary(w http.ResponseWriter, r *http.Request) {
 	accounts, err := many(r.Context(), a.DB, `SELECT a.id::text AS account_id,a.name,a.classification,
  (a.opening_balance_idr + coalesce(sum(CASE WHEN a.classification='asset' AND t.to_account_id=a.id THEN t.amount_idr WHEN a.classification='asset' AND t.from_account_id=a.id THEN -t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type IN ('liability_purchase','liability_fee') THEN t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type='debt_repayment' THEN -t.amount_idr ELSE 0 END),0)) AS balance_idr
  FROM mimo.finance_accounts a LEFT JOIN mimo.finance_transactions t ON t.owner_id=a.owner_id AND t.status='posted' AND (t.to_account_id=a.id OR t.from_account_id=a.id)
- WHERE a.owner_id=$1 AND a.archived_at IS NULL GROUP BY a.id ORDER BY a.classification,a.name`, a.C.OwnerID)
+ WHERE a.owner_id=$1 AND a.archived_at IS NULL GROUP BY a.id ORDER BY a.classification,a.name`, a.owner(r.Context()))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -535,7 +535,7 @@ func (a *App) financeSummary(w http.ResponseWriter, r *http.Request) {
 		Assets      int64 `json:"assets"`
 		Liabilities int64 `json:"liabilities"`
 	}
-	err = a.DB.QueryRow(r.Context(), `SELECT coalesce(sum(balance_idr) FILTER (WHERE classification='asset'),0),coalesce(sum(balance_idr) FILTER (WHERE classification='liability'),0) FROM (SELECT a.classification,a.opening_balance_idr+coalesce(sum(CASE WHEN a.classification='asset' AND t.to_account_id=a.id THEN t.amount_idr WHEN a.classification='asset' AND t.from_account_id=a.id THEN -t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type IN ('liability_purchase','liability_fee') THEN t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type='debt_repayment' THEN -t.amount_idr ELSE 0 END),0) AS balance_idr FROM mimo.finance_accounts a LEFT JOIN mimo.finance_transactions t ON t.owner_id=a.owner_id AND t.status='posted' AND (t.to_account_id=a.id OR t.from_account_id=a.id) WHERE a.owner_id=$1 AND a.archived_at IS NULL GROUP BY a.id) x`, a.C.OwnerID).Scan(&aggregate.Assets, &aggregate.Liabilities)
+	err = a.DB.QueryRow(r.Context(), `SELECT coalesce(sum(balance_idr) FILTER (WHERE classification='asset'),0),coalesce(sum(balance_idr) FILTER (WHERE classification='liability'),0) FROM (SELECT a.classification,a.opening_balance_idr+coalesce(sum(CASE WHEN a.classification='asset' AND t.to_account_id=a.id THEN t.amount_idr WHEN a.classification='asset' AND t.from_account_id=a.id THEN -t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type IN ('liability_purchase','liability_fee') THEN t.amount_idr WHEN a.classification='liability' AND t.to_account_id=a.id AND t.type='debt_repayment' THEN -t.amount_idr ELSE 0 END),0) AS balance_idr FROM mimo.finance_accounts a LEFT JOIN mimo.finance_transactions t ON t.owner_id=a.owner_id AND t.status='posted' AND (t.to_account_id=a.id OR t.from_account_id=a.id) WHERE a.owner_id=$1 AND a.archived_at IS NULL GROUP BY a.id) x`, a.owner(r.Context())).Scan(&aggregate.Assets, &aggregate.Liabilities)
 	if err != nil {
 		internalErr(w, err)
 		return

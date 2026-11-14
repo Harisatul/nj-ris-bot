@@ -36,7 +36,7 @@ func (a *App) objectCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	var rid string
-	err = tx.QueryRow(ctx, `INSERT INTO mimo.objects(owner_id,name,description,category,metadata) VALUES($1,$2,$3,$4,$5::jsonb) RETURNING id::text`, a.C.OwnerID, strings.TrimSpace(d.Name), d.Description, d.Category, string(metadata)).Scan(&rid)
+	err = tx.QueryRow(ctx, `INSERT INTO mimo.objects(owner_id,name,description,category,metadata) VALUES($1,$2,$3,$4,$5::jsonb) RETURNING id::text`, a.owner(ctx), strings.TrimSpace(d.Name), d.Description, d.Category, string(metadata)).Scan(&rid)
 	if err == nil {
 		err = a.index(ctx, tx, "object", rid, d.Name+" "+d.Category+" "+d.Description)
 	}
@@ -50,7 +50,7 @@ func (a *App) objectCreate(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, objectSelect+` AND id=$2::uuid`, a.C.OwnerID, rid)
+	out, err := one(ctx, a.DB, objectSelect+` AND id=$2::uuid`, a.owner(ctx), rid)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -58,7 +58,7 @@ func (a *App) objectCreate(w http.ResponseWriter, r *http.Request) {
 	jsonCreated(w, out)
 }
 func (a *App) objectList(w http.ResponseWriter, r *http.Request) {
-	data, err := many(r.Context(), a.DB, objectSelect+` ORDER BY updated_at DESC LIMIT $2`, a.C.OwnerID, limit(r, 30, 100))
+	data, err := many(r.Context(), a.DB, objectSelect+` ORDER BY updated_at DESC LIMIT $2`, a.owner(r.Context()), limit(r, 30, 100))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -68,7 +68,7 @@ func (a *App) objectList(w http.ResponseWriter, r *http.Request) {
 func (a *App) objectGet(w http.ResponseWriter, r *http.Request) {
 	data, err := one(r.Context(), a.DB, `SELECT o.id::text AS id,o.name,o.description,o.category,o.metadata,o.created_at,o.updated_at,
  (SELECT coalesce(json_agg(json_build_object('id',a.id,'caption',a.caption,'mime_type',a.mime_type)),'[]'::json) FROM mimo.object_assets oa JOIN mimo.assets a ON a.id=oa.asset_id WHERE oa.object_id=o.id AND a.scope_type='personal' AND a.scope_id=$1 AND a.status='active') AS assets
- FROM mimo.objects o WHERE o.owner_id=$1 AND o.deleted_at IS NULL AND o.id=$2::uuid`, a.C.OwnerID, id(r))
+	FROM mimo.objects o WHERE o.owner_id=$1 AND o.deleted_at IS NULL AND o.id=$2::uuid`, a.owner(r.Context()), id(r))
 	if isNotFound(err) {
 		jsonErr(w, 404, "object not found")
 		return
@@ -98,7 +98,7 @@ func (a *App) objectPatch(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	var old objectInput
 	var metadata []byte
-	err = tx.QueryRow(ctx, `SELECT name,description,coalesce(category,''),metadata FROM mimo.objects WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, a.C.OwnerID, id(r)).Scan(&old.Name, &old.Description, &old.Category, &metadata)
+	err = tx.QueryRow(ctx, `SELECT name,description,coalesce(category,''),metadata FROM mimo.objects WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, a.owner(ctx), id(r)).Scan(&old.Name, &old.Description, &old.Category, &metadata)
 	if isNotFound(err) {
 		jsonErr(w, 404, "object not found")
 		return
@@ -125,7 +125,7 @@ func (a *App) objectPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	meta, _ := json.Marshal(old.Metadata)
-	_, err = tx.Exec(ctx, `UPDATE mimo.objects SET name=$1,description=$2,category=$3,metadata=$4::jsonb WHERE owner_id=$5 AND id=$6::uuid`, old.Name, old.Description, old.Category, string(meta), a.C.OwnerID, id(r))
+	_, err = tx.Exec(ctx, `UPDATE mimo.objects SET name=$1,description=$2,category=$3,metadata=$4::jsonb WHERE owner_id=$5 AND id=$6::uuid`, old.Name, old.Description, old.Category, string(meta), a.owner(ctx), id(r))
 	if err == nil {
 		err = a.index(ctx, tx, "object", id(r), old.Name+" "+old.Category+" "+old.Description)
 	}
@@ -139,7 +139,7 @@ func (a *App) objectPatch(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, objectSelect+` AND id=$2::uuid`, a.C.OwnerID, id(r))
+	out, err := one(ctx, a.DB, objectSelect+` AND id=$2::uuid`, a.owner(ctx), id(r))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -154,7 +154,7 @@ func (a *App) objectDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE mimo.objects SET deleted_at=now() WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, a.C.OwnerID, id(r))
+	tag, err := tx.Exec(ctx, `UPDATE mimo.objects SET deleted_at=now() WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, a.owner(ctx), id(r))
 	if err != nil {
 		jsonErr(w, 400, "invalid object id")
 		return
@@ -192,14 +192,14 @@ func (a *App) objectAttachAsset(w http.ResponseWriter, r *http.Request) {
 	tag, err := tx.Exec(ctx, `INSERT INTO mimo.object_assets(object_id,asset_id)
  SELECT o.id,a.id FROM mimo.objects o JOIN mimo.assets a ON a.id=$3::uuid
  WHERE o.id=$2::uuid AND o.owner_id=$1 AND o.deleted_at IS NULL AND a.scope_type='personal' AND a.scope_id=$1 AND a.status='active'
- ON CONFLICT DO NOTHING`, a.C.OwnerID, id(r), d.AssetID)
+	 ON CONFLICT DO NOTHING`, a.owner(ctx), id(r), d.AssetID)
 	if err != nil {
 		jsonErr(w, 400, "invalid ids")
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		var exists bool
-		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mimo.object_assets oa JOIN mimo.objects o ON o.id=oa.object_id JOIN mimo.assets a ON a.id=oa.asset_id WHERE oa.object_id=$1::uuid AND oa.asset_id=$2::uuid AND o.owner_id=$3 AND o.deleted_at IS NULL AND a.scope_type='personal' AND a.scope_id=$3 AND a.status='active')`, id(r), d.AssetID, a.C.OwnerID).Scan(&exists)
+		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mimo.object_assets oa JOIN mimo.objects o ON o.id=oa.object_id JOIN mimo.assets a ON a.id=oa.asset_id WHERE oa.object_id=$1::uuid AND oa.asset_id=$2::uuid AND o.owner_id=$3 AND o.deleted_at IS NULL AND a.scope_type='personal' AND a.scope_id=$3 AND a.status='active')`, id(r), d.AssetID, a.owner(ctx)).Scan(&exists)
 		if err != nil || !exists {
 			jsonErr(w, 404, "object or asset not found")
 			return

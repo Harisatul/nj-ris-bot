@@ -43,7 +43,7 @@ func (a *App) memoryCreate(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	var rid string
 	err = tx.QueryRow(ctx, `INSERT INTO mimo.memory_entries(scope_type,scope_id,title,summary,category,importance,occurred_at,source_kind)
- VALUES('personal',$1,$2,$3,$4,$5,$6,'manual') RETURNING id::text`, a.C.OwnerID, strings.TrimSpace(d.Title), strings.TrimSpace(d.Summary), d.Category, d.Importance, d.OccurredAt).Scan(&rid)
+ VALUES('personal',$1,$2,$3,$4,$5,$6,'manual') RETURNING id::text`, a.owner(ctx), strings.TrimSpace(d.Title), strings.TrimSpace(d.Summary), d.Category, d.Importance, d.OccurredAt).Scan(&rid)
 	if err == nil {
 		err = a.index(ctx, tx, "memory", rid, d.Title+" "+d.Summary)
 	}
@@ -57,7 +57,7 @@ func (a *App) memoryCreate(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, memorySelect+` AND id=$2::uuid`, a.C.OwnerID, rid)
+	out, err := one(ctx, a.DB, memorySelect+` AND id=$2::uuid`, a.owner(ctx), rid)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -65,7 +65,7 @@ func (a *App) memoryCreate(w http.ResponseWriter, r *http.Request) {
 	jsonCreated(w, out)
 }
 func (a *App) memoryList(w http.ResponseWriter, r *http.Request) {
-	data, err := many(r.Context(), a.DB, memorySelect+` ORDER BY created_at DESC LIMIT $2`, a.C.OwnerID, limit(r, 30, 100))
+	data, err := many(r.Context(), a.DB, memorySelect+` ORDER BY created_at DESC LIMIT $2`, a.owner(r.Context()), limit(r, 30, 100))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -80,7 +80,7 @@ func (a *App) memoryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE mimo.memory_entries SET status='deleted' WHERE scope_type='personal' AND scope_id=$1 AND id=$2::uuid AND status='active'`, a.C.OwnerID, id(r))
+	tag, err := tx.Exec(ctx, `UPDATE mimo.memory_entries SET status='deleted' WHERE scope_type='personal' AND scope_id=$1 AND id=$2::uuid AND status='active'`, a.owner(ctx), id(r))
 	if err != nil {
 		jsonErr(w, 400, "invalid memory id")
 		return

@@ -4,6 +4,11 @@ import { createHash } from "node:crypto";
 // Keep this plugin thin: the Go API owns validation, data access, and permissions.
 const BASE = (process.env.MIMO_API_URL || "http://127.0.0.1:8080").replace(/\/$/, "");
 const TOKEN = process.env.MIMO_API_TOKEN || "";
+// OpenClaw's native plugin environment is Gateway-global in the verified
+// 2026.10.10 runtime. Require an operator assertion that this Gateway is an
+// isolated agent process; otherwise registering Mimo tools could share one
+// credential across Neura, Najwa, and Nara.
+const ISOLATED = process.env.MIMO_AGENT_ISOLATED === "true";
 
 type Args = Record<string, unknown>;
 function select(args: Args, fields: string[]): Args {
@@ -68,6 +73,7 @@ export default {
   id: "mimo-tools",
   name: "Mimo Tools",
   register(api: any) {
+    if (!ISOLATED) return;
     register(api, "mimo_notes", "Create/list/read/edit/delete persistent personal notes and ideas.",
       Type.Object({
         action: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("get"), Type.Literal("update"), Type.Literal("delete")]),
@@ -154,5 +160,24 @@ export default {
         const path = `/v1/assets/${pathID(p.id)}`;
         return request("GET", p.action === "download" ? path + "/download" : path);
       });
+    register(api, "mimo_knowledge", "Save shared reading sources and distinct human or AI-attributed interpretations; workspace is authorization-checked by Mimo.",
+      Type.Object({ action: Type.Union([Type.Literal("source"), Type.Literal("note"), Type.Literal("search")]), workspace: S(), query: opt(S()), title: opt(S()), body: opt(S()), source_id: opt(S()), source_type: opt(S()), authors: opt(Type.Array(S())), url: opt(S()), authored_by: opt(Type.Union([Type.Literal("human"), Type.Literal("ai")])) }),
+      async (_id, p) => {
+        if (p.action === "source") return request("POST", "/v1/knowledge/sources", select(p, ["workspace", "title", "source_type", "authors", "url"]));
+        if (p.action === "note") return request("POST", "/v1/knowledge/notes", select(p, ["workspace", "title", "body", "source_id", "authored_by"]));
+        return request("POST", "/v1/knowledge/search", select(p, ["workspace", "query"]));
+      });
+    register(api, "mimo_moments", "Capture or search shared moments. Mimo keeps occurred_at separate from recorded_at and applies workspace authorization.",
+      Type.Object({ action: Type.Union([Type.Literal("capture"), Type.Literal("search")]), workspace: S(), title: opt(S()), description: opt(S()), occurred_at: opt(S()), query: opt(S()), tags: opt(Type.Array(S())), location: opt(S()) }),
+      async (_id, p) => p.action === "capture" ? request("POST", "/v1/moments", select(p, ["workspace", "title", "description", "occurred_at", "tags", "location"])) : request("POST", "/v1/moments/search", select(p, ["workspace", "query"])));
+    register(api, "mimo_discussion", "Store a structured discussion while keeping human perspectives and AI synthesis explicitly attributed.",
+      Type.Object({ workspace: S(), title: S(), body: S(), source_id: opt(S()), perspectives: opt(Type.Array(Type.Any())), source_refs: opt(Type.Array(Type.Any())), synthesis: opt(S()), unresolved_questions: opt(Type.Array(S())), authored_by: opt(Type.Union([Type.Literal("human"), Type.Literal("ai")])) }),
+      async (_id, p) => request("POST", "/v1/knowledge/discussions", p));
+    register(api, "mimo_legacy", "Create explicitly curated legacy collections. Adding source material never grants redistribution rights.",
+      Type.Object({ action: Type.Union([Type.Literal("create"), Type.Literal("approve")]), workspace: S(), id: opt(S()), slug: opt(S()), title: opt(S()), description: opt(S()) }),
+      async (_id, p) => p.action === "approve" ? request("POST", `/v1/legacy/collections/${pathID(p.id)}/approve?workspace=${encodeURIComponent(String(p.workspace))}`) : request("POST", "/v1/legacy/collections", select(p, ["workspace", "slug", "title", "description"])));
+    register(api, "mimo_share", "Grant or revoke workspace membership; Mimo requires an authenticated human workspace owner.",
+      Type.Object({ action: Type.Union([Type.Literal("grant"), Type.Literal("revoke")]), workspace: S(), principal: S(), role: opt(S()), permission: opt(S()) }),
+      async (_id, p) => request("POST", "/v1/sharing", select(p, ["action", "workspace", "principal", "role", "permission"])));
   },
 };

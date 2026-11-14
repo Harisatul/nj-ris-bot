@@ -1,0 +1,5 @@
+# Knowledge, moments, and legacy API
+
+New endpoints are `POST /v1/knowledge/sources`, `POST /v1/knowledge/notes`, `POST /v1/knowledge/discussions`, `POST /v1/knowledge/search`, `POST /v1/moments`, `POST /v1/moments/search`, `POST /v1/legacy/collections`, `POST /v1/legacy/collections/{id}/approve`, `GET /v1/legacy/collections/{id}/export`, and `POST /v1/sharing`. JSON writes require a `workspace` slug; the slug is only a selector and is checked against the authenticated principal's permission.
+
+Knowledge notes preserve author principal, authored-by (`human` or `ai`), source verification, and visibility. Discussions preserve distinct perspectives, references, and AI synthesis attribution. Moments preserve occurred and recorded timestamps separately. Media remains metadata-only unless R2 is configured; large blobs are not stored in PostgreSQL. Legacy collections are drafts until explicitly approved; approval requires exactly two active human members and one approval from each. Agent approvals do not count. The export endpoint currently emits collection metadata; item rendering remains a follow-up.

@@ -37,7 +37,7 @@ func (a *App) noteCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	var rid string
-	err = tx.QueryRow(ctx, `INSERT INTO mimo.notes(owner_id,kind,title,content,tags) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, a.C.OwnerID, d.Kind, strings.TrimSpace(d.Title), d.Content, d.Tags).Scan(&rid)
+	err = tx.QueryRow(ctx, `INSERT INTO mimo.notes(owner_id,kind,title,content,tags) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, a.owner(ctx), d.Kind, strings.TrimSpace(d.Title), d.Content, d.Tags).Scan(&rid)
 	if err == nil {
 		err = a.index(ctx, tx, "note", rid, d.Title+"\n"+d.Content)
 	}
@@ -51,7 +51,7 @@ func (a *App) noteCreate(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	data, err := one(ctx, a.DB, noteSelect+` AND id=$2::uuid`, a.C.OwnerID, rid)
+	data, err := one(ctx, a.DB, noteSelect+` AND id=$2::uuid`, a.owner(ctx), rid)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -78,7 +78,7 @@ func validNote(d noteInput) bool {
 	return true
 }
 func (a *App) noteList(w http.ResponseWriter, r *http.Request) {
-	data, err := many(r.Context(), a.DB, noteSelect+` ORDER BY updated_at DESC LIMIT $2`, a.C.OwnerID, limit(r, 30, 100))
+	data, err := many(r.Context(), a.DB, noteSelect+` ORDER BY updated_at DESC LIMIT $2`, a.owner(r.Context()), limit(r, 30, 100))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -86,7 +86,7 @@ func (a *App) noteList(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"items": data})
 }
 func (a *App) noteGet(w http.ResponseWriter, r *http.Request) {
-	data, err := one(r.Context(), a.DB, noteSelect+` AND id=$2::uuid`, a.C.OwnerID, id(r))
+	data, err := one(r.Context(), a.DB, noteSelect+` AND id=$2::uuid`, a.owner(r.Context()), id(r))
 	if isNotFound(err) {
 		jsonErr(w, 404, "note not found")
 		return
@@ -115,7 +115,7 @@ func (a *App) notePatch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	var old noteInput
-	err = tx.QueryRow(ctx, `SELECT title,content,kind,tags FROM mimo.notes WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, a.C.OwnerID, id(r)).Scan(&old.Title, &old.Content, &old.Kind, &old.Tags)
+	err = tx.QueryRow(ctx, `SELECT title,content,kind,tags FROM mimo.notes WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL FOR UPDATE`, a.owner(ctx), id(r)).Scan(&old.Title, &old.Content, &old.Kind, &old.Tags)
 	if isNotFound(err) {
 		jsonErr(w, 404, "note not found")
 		return
@@ -143,7 +143,7 @@ func (a *App) notePatch(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO mimo.note_revisions(note_id,previous_title,previous_content) VALUES($1::uuid,$2,$3)`, id(r), old.Title, old.Content)
 	if err == nil {
-		_, err = tx.Exec(ctx, `UPDATE mimo.notes SET title=$1,content=$2,kind=$3,tags=$4 WHERE id=$5::uuid AND owner_id=$6`, dnext.Title, dnext.Content, dnext.Kind, dnext.Tags, id(r), a.C.OwnerID)
+		_, err = tx.Exec(ctx, `UPDATE mimo.notes SET title=$1,content=$2,kind=$3,tags=$4 WHERE id=$5::uuid AND owner_id=$6`, dnext.Title, dnext.Content, dnext.Kind, dnext.Tags, id(r), a.owner(ctx))
 	}
 	if err == nil {
 		err = a.index(ctx, tx, "note", id(r), dnext.Title+"\n"+dnext.Content)
@@ -158,7 +158,7 @@ func (a *App) notePatch(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	data, err := one(ctx, a.DB, noteSelect+` AND id=$2::uuid`, a.C.OwnerID, id(r))
+	data, err := one(ctx, a.DB, noteSelect+` AND id=$2::uuid`, a.owner(ctx), id(r))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -173,7 +173,7 @@ func (a *App) noteDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE mimo.notes SET deleted_at=now() WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, a.C.OwnerID, id(r))
+	tag, err := tx.Exec(ctx, `UPDATE mimo.notes SET deleted_at=now() WHERE owner_id=$1 AND id=$2::uuid AND deleted_at IS NULL`, a.owner(ctx), id(r))
 	if err != nil {
 		jsonErr(w, 400, "invalid note id")
 		return

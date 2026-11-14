@@ -70,7 +70,7 @@ func (a *App) assetUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ext := map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf"}[mime]
-	key := fmt.Sprintf("personal/%s/%s.%s", a.C.OwnerID, uid, ext)
+	key := fmt.Sprintf("personal/%s/%s.%s", a.owner(r.Context()), uid, ext)
 	if err = a.R2.Upload(r.Context(), key, mime, bytes.NewReader(content), int64(len(content))); err != nil {
 		internalErr(w, err)
 		return
@@ -87,7 +87,7 @@ func (a *App) assetUpload(w http.ResponseWriter, r *http.Request) {
 	source := "upload:" + filepath.Base(header.Filename)
 	var rid string
 	err = tx.QueryRow(ctx, `INSERT INTO mimo.assets(scope_type,scope_id,bucket_name,object_key,mime_type,size_bytes,sha256_hex,caption,source_ref,captured_at)
- VALUES('personal',$1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`, a.C.OwnerID, a.C.R2Bucket, key, mime, len(content), hex.EncodeToString(sum[:]), caption, source, time.Now().UTC()).Scan(&rid)
+ VALUES('personal',$1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`, a.owner(ctx), a.C.R2Bucket, key, mime, len(content), hex.EncodeToString(sum[:]), caption, source, time.Now().UTC()).Scan(&rid)
 	if err == nil {
 		err = a.index(ctx, tx, "asset", rid, caption+" "+source)
 	}
@@ -102,7 +102,7 @@ func (a *App) assetUpload(w http.ResponseWriter, r *http.Request) {
 		internalErr(w, err)
 		return
 	}
-	out, err := one(ctx, a.DB, assetSelect+` AND id=$2::uuid`, a.C.OwnerID, rid)
+	out, err := one(ctx, a.DB, assetSelect+` AND id=$2::uuid`, a.owner(ctx), rid)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -110,7 +110,7 @@ func (a *App) assetUpload(w http.ResponseWriter, r *http.Request) {
 	jsonCreated(w, out)
 }
 func (a *App) assetList(w http.ResponseWriter, r *http.Request) {
-	data, err := many(r.Context(), a.DB, assetSelect+` ORDER BY created_at DESC LIMIT $2`, a.C.OwnerID, limit(r, 30, 100))
+	data, err := many(r.Context(), a.DB, assetSelect+` ORDER BY created_at DESC LIMIT $2`, a.owner(r.Context()), limit(r, 30, 100))
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -118,7 +118,7 @@ func (a *App) assetList(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"items": data})
 }
 func (a *App) assetGet(w http.ResponseWriter, r *http.Request) {
-	out, err := one(r.Context(), a.DB, assetSelect+` AND id=$2::uuid`, a.C.OwnerID, id(r))
+	out, err := one(r.Context(), a.DB, assetSelect+` AND id=$2::uuid`, a.owner(r.Context()), id(r))
 	if isNotFound(err) {
 		jsonErr(w, 404, "asset not found")
 		return
@@ -135,7 +135,7 @@ func (a *App) assetDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var key, bucket string
-	err := a.DB.QueryRow(r.Context(), `SELECT object_key,bucket_name FROM mimo.assets WHERE id=$1::uuid AND scope_type='personal' AND scope_id=$2 AND status='active'`, id(r), a.C.OwnerID).Scan(&key, &bucket)
+	err := a.DB.QueryRow(r.Context(), `SELECT object_key,bucket_name FROM mimo.assets WHERE id=$1::uuid AND scope_type='personal' AND scope_id=$2 AND status='active'`, id(r), a.owner(r.Context())).Scan(&key, &bucket)
 	if isNotFound(err) {
 		jsonErr(w, 404, "asset not found")
 		return
@@ -165,7 +165,7 @@ func (a *App) assetDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	var key, bucket string
-	err = tx.QueryRow(ctx, `UPDATE mimo.assets SET status='deleted' WHERE id=$1::uuid AND scope_type='personal' AND scope_id=$2 AND status='active' RETURNING object_key,bucket_name`, id(r), a.C.OwnerID).Scan(&key, &bucket)
+	err = tx.QueryRow(ctx, `UPDATE mimo.assets SET status='deleted' WHERE id=$1::uuid AND scope_type='personal' AND scope_id=$2 AND status='active' RETURNING object_key,bucket_name`, id(r), a.owner(ctx)).Scan(&key, &bucket)
 	if isNotFound(err) {
 		jsonErr(w, 404, "asset not found")
 		return

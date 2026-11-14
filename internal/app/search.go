@@ -42,7 +42,7 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
  FROM mimo.search_chunks WHERE owner_id=$1
  AND (search_tsv @@ plainto_tsquery('simple',$2) OR body ILIKE '%' || $2 || '%')
  AND (source_type<>'memory' OR EXISTS (SELECT 1 FROM mimo.memory_entries m WHERE m.id=source_id AND m.scope_type='personal' AND m.scope_id=$1 AND m.status='active' AND (m.expires_at IS NULL OR m.expires_at>now())))
- ORDER BY score DESC LIMIT $3`, a.C.OwnerID, d.Query, d.Limit*3)
+ ORDER BY score DESC LIMIT $3`, a.owner(r.Context()), d.Query, d.Limit*3)
 	if err != nil {
 		internalErr(w, err)
 		return
@@ -80,7 +80,7 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
 FROM mimo.semantic_embeddings e JOIN mimo.search_chunks c ON c.id=e.chunk_id AND c.content_hash=e.content_hash
 WHERE c.owner_id=$1 AND e.model_id=$2 AND e.dimensions=$4
  AND (c.source_type<>'memory' OR EXISTS (SELECT 1 FROM mimo.memory_entries m WHERE m.id=c.source_id AND m.scope_type='personal' AND m.scope_id=$1 AND m.status='active' AND (m.expires_at IS NULL OR m.expires_at>now())))
-ORDER BY e.embedding <=> (($3::text)::vector) LIMIT $5`, a.C.OwnerID, a.C.EmbeddingModel, vectorText(v), a.C.EmbeddingDimensions, d.Limit*3)
+ORDER BY e.embedding <=> (($3::text)::vector) LIMIT $5`, a.owner(r.Context()), a.C.EmbeddingModel, vectorText(v), a.C.EmbeddingDimensions, d.Limit*3)
 			if e != nil {
 				warning = "semantic database query failed; lexical results only"
 				log.Printf("search vector query failed: %v", e)
