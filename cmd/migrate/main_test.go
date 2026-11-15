@@ -62,11 +62,11 @@ func TestMigrationIntegration(t *testing.T) {
 		if err := m.migrate(ctx, new(bytes.Buffer)); err != nil {
 			t.Fatal(err)
 		}
-		assertMigrationCount(t, ctx, conn, 5)
+		assertMigrationCount(t, ctx, conn, 8)
 		if err := m.migrate(ctx, new(bytes.Buffer)); err != nil {
 			t.Fatal(err)
 		}
-		assertMigrationCount(t, ctx, conn, 5)
+		assertMigrationCount(t, ctx, conn, 8)
 	})
 
 	t.Run("legacy baseline", func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestMigrationIntegration(t *testing.T) {
 		if err := m.migrate(ctx, new(bytes.Buffer)); err != nil {
 			t.Fatal(err)
 		}
-		assertMigrationCount(t, ctx, conn, 5)
+		assertMigrationCount(t, ctx, conn, 8)
 	})
 
 	t.Run("failure rolls back and concurrency is serialized", func(t *testing.T) {
@@ -133,7 +133,7 @@ func TestMigrationIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		assertMigrationCount(t, ctx, conn, 5)
+		assertMigrationCount(t, ctx, conn, 8)
 	})
 }
 

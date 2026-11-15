@@ -103,6 +103,12 @@ func personalRoutePermission(r *http.Request) string {
 		}
 		return "memory:write"
 	}
+	if strings.HasPrefix(path, "/v1/activities") || strings.HasPrefix(path, "/v1/timeline") || strings.HasPrefix(path, "/v1/habits") || strings.HasPrefix(path, "/v1/checkin") {
+		if r.Method == http.MethodGet {
+			return "timeline:read"
+		}
+		return "timeline:write"
+	}
 	return ""
 }
 
