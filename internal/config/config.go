@@ -14,6 +14,13 @@ type Config struct {
 	EmbeddingURL, EmbeddingKey, EmbeddingModel      string
 	EmbeddingDimensions                             int
 	MaxUploadBytes                                  int64
+	CheckinEvaluationInterval                       time.Duration
+	CheckinOutboundEnabled                          bool
+	CheckinDeliveryMode                             string
+	CheckinAllowedPrincipals                        string
+	CheckinMaxOutboundPerMinute                     int
+	CheckinInboundEnabled                           bool
+	CheckinInboundSecret                            string
 }
 
 func Env(key, def string) string {
@@ -30,6 +37,23 @@ func Load() (Config, error) {
 		R2SecretKey: os.Getenv("R2_SECRET_ACCESS_KEY"), R2Bucket: os.Getenv("R2_BUCKET"),
 		EmbeddingURL: Env("EMBEDDING_URL", os.Getenv("EMBEDDING_API_URL")), EmbeddingKey: os.Getenv("EMBEDDING_API_KEY"),
 		EmbeddingModel: Env("EMBEDDING_MODEL", "embeddinggemma-2:440m"), EmbeddingDimensions: 768, MaxUploadBytes: 15 << 20,
+	}
+	checkinMinutes, e := strconv.Atoi(Env("MIMO_CHECKIN_EVALUATION_INTERVAL_MINUTES", "15"))
+	if e != nil || checkinMinutes < 1 || checkinMinutes > 1440 {
+		return c, errors.New("MIMO_CHECKIN_EVALUATION_INTERVAL_MINUTES must be 1..1440")
+	}
+	c.CheckinEvaluationInterval = time.Duration(checkinMinutes) * time.Minute
+	c.CheckinOutboundEnabled = strings.EqualFold(Env("MIMO_CHECKIN_OUTBOUND_ENABLED", "false"), "true")
+	c.CheckinDeliveryMode = strings.ToLower(Env("MIMO_CHECKIN_DELIVERY_MODE", "fake"))
+	c.CheckinAllowedPrincipals = os.Getenv("MIMO_CHECKIN_ALLOWED_PRINCIPALS")
+	c.CheckinInboundEnabled = strings.EqualFold(Env("MIMO_CHECKIN_INBOUND_ENABLED", "false"), "true")
+	c.CheckinInboundSecret = os.Getenv("MIMO_CHECKIN_INBOUND_SECRET")
+	c.CheckinMaxOutboundPerMinute, e = strconv.Atoi(Env("MIMO_CHECKIN_MAX_OUTBOUND_PER_MINUTE", "1"))
+	if e != nil || c.CheckinMaxOutboundPerMinute < 1 || c.CheckinMaxOutboundPerMinute > 60 {
+		return c, errors.New("MIMO_CHECKIN_MAX_OUTBOUND_PER_MINUTE must be 1..60")
+	}
+	if c.CheckinDeliveryMode != "fake" && c.CheckinDeliveryMode != "cli" {
+		return c, errors.New("MIMO_CHECKIN_DELIVERY_MODE must be fake or cli")
 	}
 	if v := os.Getenv("EMBEDDING_DIMENSIONS"); v != "" {
 		n, e := strconv.Atoi(v)

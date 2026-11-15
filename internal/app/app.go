@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/mimo/personal-os/internal/checkin"
 	"github.com/mimo/personal-os/internal/config"
 	"github.com/mimo/personal-os/internal/embedding"
 	"github.com/mimo/personal-os/internal/r2"
@@ -40,6 +41,9 @@ func (a *App) Routes() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{"ok": true, "service": "mimo-api"})
 	})
+	// This route has its own HMAC authentication and is intentionally outside
+	// the agent Bearer-token middleware. It never accepts owner/workspace claims.
+	r.Post("/internal/v1/checkin/inbound", a.checkinInbound)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authorize)
 		r.Post("/v1/notes", a.noteCreate)
@@ -84,11 +88,30 @@ func (a *App) Routes() http.Handler {
 		r.Patch("/v1/finance/transactions/{id}", a.financeTransactionPatch)
 		r.Delete("/v1/finance/transactions/{id}", a.financeTransactionDelete)
 		r.Get("/v1/finance/summary", a.financeSummary)
+		r.Post("/v1/activities/batch", a.activityBatch)
+		r.Get("/v1/activities", a.activityList)
+		r.Get("/v1/activities/{id}", a.activityGet)
+		r.Patch("/v1/activities/{id}", a.activityPatch)
+		r.Post("/v1/activities/{id}/void", a.activityVoid)
+		r.Get("/v1/timeline", a.timeline)
+		r.Get("/v1/timeline/coverage", a.timelineCoverage)
+		r.Post("/v1/habits", a.habitCreate)
+		r.Get("/v1/habits", a.habitList)
+		r.Get("/v1/habits/progress", a.habitProgress)
+		r.Patch("/v1/habits/{id}", a.habitPatch)
+		r.Get("/v1/checkin/settings", a.checkinSettingsGet)
+		r.Patch("/v1/checkin/settings", a.checkinSettingsPatch)
 		r.Post("/v1/finance/liability-purchases", a.financeLiabilityPurchase)
 		r.Get("/v1/finance/installments", a.financeInstallments)
 		r.Post("/v1/finance/installments/{id}/payments", a.financeInstallmentPay)
 	})
 	return r
+}
+
+func (a *App) checkinInbound(w http.ResponseWriter, r *http.Request) {
+	checkin.GatewayHandler{
+		DB: a.DB, Secret: []byte(a.C.CheckinInboundSecret), Enabled: a.C.CheckinInboundEnabled,
+	}.ServeHTTP(w, r)
 }
 func jsonOK(w http.ResponseWriter, x any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

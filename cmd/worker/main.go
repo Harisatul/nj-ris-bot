@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/mimo/personal-os/internal/checkin"
 	"github.com/mimo/personal-os/internal/config"
 	"github.com/mimo/personal-os/internal/embedding"
 )
@@ -38,23 +41,42 @@ func main() {
 	if c.HasEmbedding() {
 		ec = embedding.New(c.EmbeddingURL, c.EmbeddingKey, c.EmbeddingModel, c.EmbeddingDimensions)
 	}
-	log.Printf("Mimo worker started; embeddings enabled=%v", ec != nil)
+	host, _ := os.Hostname()
+	scheduler := checkin.NewScheduler(db, checkin.RealClock{}, fmt.Sprintf("%s:%d", host, os.Getpid()))
+	var delivery checkin.CheckinDelivery
+	if c.CheckinOutboundEnabled && c.CheckinDeliveryMode == "cli" {
+		allowed := strings.Split(c.CheckinAllowedPrincipals, ",")
+		delivery = checkin.NewOpenClawCLIDelivery(db, "openclaw", true, allowed, c.CheckinMaxOutboundPerMinute)
+	}
+	checkinTicker := time.NewTicker(c.CheckinEvaluationInterval)
+	defer checkinTicker.Stop()
+	log.Printf("Mimo worker started; embeddings enabled=%v; check-in scheduler enabled=true; outbound delivery enabled=%v", ec != nil, delivery != nil)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
+		if delivery != nil {
+			if _, e := scheduler.ProcessOne(ctx, delivery); e != nil && ctx.Err() == nil {
+				log.Printf("check-in delivery attempt failed")
+			}
+		}
 		if ec != nil {
 			did, err := processOne(ctx, db, ec)
 			if err != nil && ctx.Err() == nil {
 				log.Printf("index worker error: %v", err)
 			}
-			if did && err == nil {
-				continue
-			}
+			_ = did
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-checkinTicker.C:
+			stats, e := scheduler.Evaluate(ctx)
+			if e != nil && ctx.Err() == nil {
+				log.Printf("check-in scheduler evaluation failed")
+			} else {
+				log.Printf("check-in scheduler evaluated=%d eligible=%d queued=%d suppressed=%d duplicates=%d", stats.Evaluated, stats.Eligible, stats.Queued, stats.Suppressed, stats.Duplicates)
+			}
 		}
 	}
 }
