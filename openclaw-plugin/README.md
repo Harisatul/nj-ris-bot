@@ -16,13 +16,16 @@ Make these variables available to the **OpenClaw Gateway process** (for example,
 
 ```bash
 MIMO_API_URL=http://127.0.0.1:8080
-MIMO_API_TOKEN=<same token as Go API>
+MIMO_NEURA_API_TOKEN=<Neura Mimo credential>
+MIMO_NAJWA_API_TOKEN=<Najwa Mimo credential>
+MIMO_NARA_API_TOKEN=<Nara Mimo credential>
+MIMO_TRUSTED_BROKER=true
 MIMO_AGENT_ISOLATED=true
 ```
 
 If Go API lives in Docker on the same host, host port `127.0.0.1:8080` is mapped by compose. If Gateway lives in Docker too, use a private shared Docker network and service name instead.
 
-The tools are declared in `openclaw.plugin.json`; check tool policies in your installed OpenClaw version and allow only `mimo-tools` or the needed tool names. The verified OpenClaw 2026.10.10 loader passes one plugin configuration/environment to the Gateway process, not separate credential environments per agent. Therefore `MIMO_AGENT_ISOLATED=true` is only safe when each agent runs in a separate Gateway/process/container with its own environment. With the default `false`, the plugin registers no tools. Verify with `openclaw plugins inspect mimo-tools --runtime` (command availability may depend on version). **Restrict WhatsApp sender allowlists to yourself** while the backend uses single-owner authentication.
+The installed OpenClaw 2026.10.10 SDK supports a per-invocation tool factory with trusted `agentId` and `assertInvocationCurrent` context. The plugin uses `contextVersion: 2`; it never accepts agent or credential selection in tool parameters. `MIMO_AGENT_ISOLATED=false` registers no tools. `MIMO_AGENT_ISOLATED=true` is only an enable gate, not an OS/process isolation boundary: all three secrets remain Gateway-global. Review shell/exec policy, native plugin trust, filesystem permissions, and sender allowlists before enabling writes. Verify with `openclaw plugins inspect mimo-tools --runtime` and the runtime version installed on the Gateway.
 
 `mimo_memory_search` calls `POST /v1/memory/search` and returns concise, owner-scoped active personal-memory matches with stable IDs and similarity scores. It never receives database credentials or executes SQL.
 

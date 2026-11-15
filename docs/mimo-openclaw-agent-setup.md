@@ -1,9 +1,17 @@
 # OpenClaw agent setup
 
-The plugin is still one `mimo-tools` plugin, but credentials must be isolated in each Gateway execution context. The verified OpenClaw 2026.10.10 runtime loads the plugin in the Gateway process and exposes environment/configuration globally; it does not provide a safe per-agent environment boundary. Configure separate Gateway processes/containers and separate environments:
+The plugin remains one `mimo-tools` plugin and can serve one Gateway with one WhatsApp session. OpenClaw 2026.10.10 provides a trusted per-invocation tool factory context (`contextVersion: 2`) containing the host-selected `agentId` and live invocation authority. The broker uses that context, never tool arguments, to select a credential and rechecks authority around each request.
 
-* Neura: `MIMO_API_TOKEN=<Neura token>`, `MIMO_AGENT_ISOLATED=true`; personal workspace/owner Haris only.
-* Najwa: `MIMO_API_TOKEN=<Najwa token>`, `MIMO_AGENT_ISOLATED=true`; personal workspace/owner Najwa only.
-* Nara: `MIMO_API_TOKEN=<Nara token>`, `MIMO_AGENT_ISOLATED=true`; shared workspace knowledge, moments, and curated legacy only.
+Configure the same Gateway process with three distinct secrets:
 
-The plugin reads environment variables from the Gateway process and intentionally registers no tools unless `MIMO_AGENT_ISOLATED=true`. Validate process separation, tool policy, and sender allowlists before enabling writes.
+* `MIMO_NEURA_API_TOKEN=<Neura credential>`
+* `MIMO_NAJWA_API_TOKEN=<Najwa credential>`
+* `MIMO_NARA_API_TOKEN=<Nara credential>`
+* `MIMO_TRUSTED_BROKER=true`
+* `MIMO_AGENT_ISOLATED=true` (existing explicit tool-enable gate)
+
+The broker mapping is fixed: `neura` selects Neura, `najwa` selects Najwa, and `nara` selects Nara. Missing, forged, unsupported, or stale runtime context fails closed. The backend remains the final authorization boundary and must continue to reject cross-owner requests and revoked credentials.
+
+This is not strong process isolation. All three secrets exist in the Gateway process environment and can potentially be read by a malicious native plugin, a local operator, or an agent with arbitrary shell/environment access. Do not enable arbitrary shell access for these agents and do not claim complete credential isolation unless the Gateway's execution policy and filesystem/process controls have also been independently audited. If that threat model is unacceptable, run separate tool runners or put a credential broker behind an authenticated service boundary.
+
+For rollback to the historical single-agent deployment, remove `MIMO_TRUSTED_BROKER`, keep only `MIMO_API_TOKEN` for Neura, and disable the other agent routes/tools; do not reuse the legacy token for Najwa or Nara.

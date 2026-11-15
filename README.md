@@ -107,7 +107,7 @@ curl -s -X POST "$MIMO_URL/v1/assets/upload" \
 
 ## OpenClaw integration
 
-See `openclaw-plugin/README.md`. Build the TypeScript plugin, make `MIMO_API_URL` and `MIMO_API_TOKEN` available to the **Gateway process**, install as a native plugin, and approve only the Mimo tools in OpenClaw tool policy. The agent must **never** be given the Neon database password or R2 private secret directly.
+See `openclaw-plugin/README.md`. Build the TypeScript plugin, make the three agent-specific Mimo credentials available to the **Gateway process** with trusted broker mode enabled, install as a native plugin, and approve only the Mimo tools in OpenClaw tool policy. The agent must **never** be given the Neon database password or R2 private secret directly.
 
 ## Photo and object retrieval
 
